@@ -1,0 +1,9 @@
+# DropSwift server dependencies.
+#
+# Required on Windows (and recommended on macOS/Linux) so the iPhone app can
+# auto-discover this computer on the local network via Bonjour/mDNS.
+# On macOS the server also falls back to the built-in `dns-sd` if this is absent.
+#
+#   pip install -r requirements.txt
+#
+zeroconf>=0.130

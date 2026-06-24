@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>DropSwift connects to your computer on your local Wi-Fi network to browse files and transfer photos.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_dropswift._tcp</string>
+	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>DropSwift needs access to your photos and videos so you can send them to your computer.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

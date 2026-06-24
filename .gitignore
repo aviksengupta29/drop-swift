@@ -1,0 +1,23 @@
+# Python / PyInstaller build output
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+
+# Server runtime data (don't commit users' transferred files)
+server/shared/
+
+# Python virtual envs
+.venv/
+venv/
+zctest/
+
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+*.xcuserdatad/

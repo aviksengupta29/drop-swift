@@ -1,0 +1,56 @@
+name: Build Windows Server (.exe)
+
+# Produces a single-file DropSwift-Server.exe that needs NOTHING installed on
+# the Windows PC — no Python, no pip. Runs in GitHub's cloud on a Windows
+# machine (PyInstaller can't build a Windows .exe from a Mac).
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'server/**'
+      - '.github/workflows/build-windows-server.yml'
+  workflow_dispatch:        # lets you trigger it manually from the Actions tab
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: pip install pyinstaller zeroconf
+
+      - name: Build single-file exe
+        run: >
+          pyinstaller --onefile
+          --name DropSwift-Server
+          --collect-all zeroconf
+          server/server.py
+
+      - name: Upload the exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: DropSwift-Server-Windows
+          path: dist/DropSwift-Server.exe
+          if-no-files-found: error
+
+  # When you push a version tag like v1.0, also publish the exe as a
+  # downloadable GitHub Release so anyone can grab it without a GitHub account.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: DropSwift-Server-Windows
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: DropSwift-Server.exe

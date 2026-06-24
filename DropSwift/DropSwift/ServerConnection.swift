@@ -1,0 +1,124 @@
+//
+//  ServerConnection.swift
+//  DropSwift
+//
+//  Talks to the DropSwift laptop server over the local network.
+//
+
+import Foundation
+import Combine
+
+/// Errors surfaced to the UI.
+enum ServerError: LocalizedError {
+    case notConnected
+    case badAddress
+    case http(Int)
+    case message(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notConnected: return "Not connected to a computer yet."
+        case .badAddress:   return "Enter a valid host and port."
+        case .http(let c):  return "Server returned HTTP \(c)."
+        case .message(let m): return m
+        }
+    }
+}
+
+/// Holds the connection details and performs all network calls.
+@MainActor
+final class ServerConnection: ObservableObject {
+    @Published var host: String { didSet { save() } }
+    @Published var port: String { didSet { save() } }
+    @Published var isConnected = false
+    @Published var serverName = ""
+    @Published var lastError: String?
+
+    private let session: URLSession
+
+    init() {
+        let d = UserDefaults.standard
+        self.host = d.string(forKey: "dropswift.host") ?? ""
+        self.port = d.string(forKey: "dropswift.port") ?? "8080"
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 15
+        config.waitsForConnectivity = false
+        self.session = URLSession(configuration: config)
+    }
+
+    private func save() {
+        let d = UserDefaults.standard
+        d.set(host, forKey: "dropswift.host")
+        d.set(port, forKey: "dropswift.port")
+    }
+
+    /// Builds a URL like http://192.168.1.5:8080/api/list?path=Photos
+    private func url(_ path: String, query: [String: String] = [:]) throws -> URL {
+        let trimmed = host.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, let portNum = Int(port) else { throw ServerError.badAddress }
+        var comps = URLComponents()
+        comps.scheme = "http"
+        comps.host = trimmed
+        comps.port = portNum
+        comps.path = path
+        if !query.isEmpty {
+            comps.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        guard let u = comps.url else { throw ServerError.badAddress }
+        return u
+    }
+
+    // MARK: - Endpoints
+
+    /// Pings the server and records whether we're connected.
+    func connect() async {
+        lastError = nil
+        do {
+            let (data, response) = try await session.data(from: try url("/api/health"))
+            try Self.check(response)
+            let health = try JSONDecoder().decode(Health.self, from: data)
+            serverName = health.name
+            isConnected = true
+        } catch {
+            isConnected = false
+            serverName = ""
+            lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Lists a folder on the laptop.
+    func list(path: String) async throws -> Listing {
+        let (data, response) = try await session.data(from: try url("/api/list", query: ["path": path]))
+        try Self.check(response)
+        return try JSONDecoder().decode(Listing.self, from: data)
+    }
+
+    /// Downloads a file to a temporary location and returns its local URL.
+    func download(path: String, name: String) async throws -> URL {
+        let (data, response) = try await session.data(from: try url("/api/download", query: ["path": path]))
+        try Self.check(response)
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: dest)
+        try data.write(to: dest)
+        return dest
+    }
+
+    /// Uploads raw bytes to the laptop under the given remote folder.
+    func upload(data: Data, filename: String, toPath: String = "") async throws {
+        var request = URLRequest(url: try url("/api/upload", query: ["path": toPath]))
+        request.httpMethod = "POST"
+        request.setValue(filename, forHTTPHeaderField: "X-Filename")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        let (_, response) = try await session.upload(for: request, from: data)
+        try Self.check(response)
+    }
+
+    // MARK: - Helpers
+
+    private static func check(_ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse else { return }
+        guard (200..<300).contains(http.statusCode) else {
+            throw ServerError.http(http.statusCode)
+        }
+    }
+}
