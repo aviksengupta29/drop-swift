@@ -20,15 +20,20 @@ struct BrowseView: View {
                             isRoot: true)
             } else {
                 let m3 = M3(scheme)
-                M3Scaffold(title: "Browse", showLogo: true) {
-                    VStack(spacing: 14) {
-                        Spacer(minLength: 60)
-                        Image(systemName: "wifi.slash").font(.system(size: 48)).foregroundStyle(m3.onSurfaceVariant)
-                        Text("Not connected").font(.system(size: 18, weight: .semibold)).foregroundStyle(m3.onSurface)
-                        Text("Connect to your computer on the Connect tab first.")
-                            .font(.system(size: 14)).foregroundStyle(m3.onSurfaceVariant)
-                            .multilineTextAlignment(.center)
+                M3Scaffold(title: "Browse", showLogo: true, scrolls: false) {
+                    VStack {
+                        Spacer(minLength: 0)
+                        VStack(spacing: 14) {
+                            Image(systemName: "wifi.slash").font(.system(size: 48)).foregroundStyle(m3.onSurfaceVariant)
+                            Text("Not connected").font(.system(size: 18, weight: .semibold)).foregroundStyle(m3.onSurface)
+                            Text("Connect to your computer on the Connect tab first.")
+                                .font(.system(size: 14)).foregroundStyle(m3.onSurfaceVariant)
+                                .multilineTextAlignment(.center)
+                        }
+                        Spacer(minLength: 0)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 70)
                 }
             }
         }
