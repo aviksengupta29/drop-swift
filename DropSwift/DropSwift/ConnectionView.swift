@@ -96,6 +96,14 @@ struct ConnectionView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
 
+                // Disconnect button — only shown while connected
+                if server.isConnected {
+                    M3OutlinedButton(title: "Disconnect", icon: "wifi.slash",
+                                     role: .destructive) {
+                        withAnimation { server.disconnect() }
+                    }
+                }
+
                 // Manual entry
                 M3OutlinedButton(title: showManual ? "Hide manual entry" : "Enter address manually",
                                  icon: "keyboard") {

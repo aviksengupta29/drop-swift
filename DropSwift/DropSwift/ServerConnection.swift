@@ -104,6 +104,13 @@ final class ServerConnection: ObservableObject {
         }
     }
 
+    /// Drops the current connection (the computer stays discoverable).
+    func disconnect() {
+        isConnected = false
+        serverName = ""
+        lastError = nil
+    }
+
     /// Lists a folder on the laptop.
     func list(path: String) async throws -> Listing {
         let (data, response) = try await session.data(from: try url("/api/list", query: ["path": path]))
