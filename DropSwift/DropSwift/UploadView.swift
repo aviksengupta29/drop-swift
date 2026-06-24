@@ -11,6 +11,7 @@ import PhotosUI
 struct UploadView: View {
     @EnvironmentObject var server: ServerConnection
     @State private var selection: [PhotosPickerItem] = []
+    @State private var sendTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -36,6 +37,7 @@ struct UploadView: View {
 
                 PhotosPicker(
                     selection: $selection,
+                    maxSelectionCount: ServerConnection.maxBatch,
                     matching: .any(of: [.images, .videos]),
                     photoLibrary: .shared()
                 ) {
@@ -48,11 +50,15 @@ struct UploadView: View {
                 .tint(Brand.violet)
                 .disabled(server.isTransferring)
 
+                Text("Up to \(ServerConnection.maxBatch) items per transfer.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
                 if server.isTransferring {
                     transferCard
                 } else if !selection.isEmpty {
                     Button {
-                        Task {
+                        sendTask = Task {
                             await server.sendPhotos(selection)
                             selection = []
                         }
@@ -102,6 +108,14 @@ struct UploadView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(role: .destructive) {
+                sendTask?.cancel()
+            } label: {
+                Label("Cancel", systemImage: "xmark.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
         }
         .padding()
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))

@@ -58,8 +58,9 @@ final class ServerConnection: ObservableObject {
         self.host = d.string(forKey: "dropswift.host") ?? ""
         self.port = d.string(forKey: "dropswift.port") ?? "8080"
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 15
-        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = 120              // idle timeout between packets
+        config.timeoutIntervalForResource = 60 * 60 * 24    // allow very large transfers
+        config.waitsForConnectivity = true
         self.session = URLSession(configuration: config)
     }
 
@@ -132,11 +133,16 @@ final class ServerConnection: ObservableObject {
         return dest
     }
 
-    /// Sends each photo/video to the laptop, keeping the original filename and
-    /// preserving all metadata, driving the progress bar as it goes.
+    /// Max items per batch (keeps memory/UX sane for very large transfers).
+    static let maxBatch = 50
+
+    /// Sends each photo/video to the laptop one at a time, STREAMING from disk
+    /// (never loading whole files into memory), keeping the original filename
+    /// and metadata. Honors task cancellation between/within files.
     func sendPhotos(_ items: [PhotosPickerItem]) async {
+        let batch = Array(items.prefix(Self.maxBatch))
         isTransferring = true
-        transferTotal = items.count
+        transferTotal = batch.count
         transferCompleted = 0
         transferFileFraction = 0
         transferResult = nil
@@ -148,43 +154,53 @@ final class ServerConnection: ObservableObject {
         }
 
         let stamp = Int(Date().timeIntervalSince1970)
-        for (index, item) in items.enumerated() {
+        for (index, item) in batch.enumerated() {
+            if Task.isCancelled { break }
             transferFileFraction = 0
 
-            let data: Data
-            let name: String
-            if let original = await Self.originalFile(for: item) {
-                // Original, untouched file: real name + full metadata.
-                (data, name) = original
-            } else if let fallback = try? await item.loadTransferable(type: Data.self) {
-                // Fallback if the library item isn't reachable.
+            // Write the original to a temp file on disk (low memory), then
+            // stream-upload that file and delete it.
+            if let (tempURL, name) = await Self.writeOriginalToTemp(for: item) {
+                transferCurrentName = name
+                do {
+                    try await uploadFile(at: tempURL, filename: name)
+                    transferCompleted += 1
+                } catch {
+                    if !Task.isCancelled { failures += 1 }
+                }
+                try? FileManager.default.removeItem(at: tempURL)
+            } else if let data = try? await item.loadTransferable(type: Data.self) {
+                // Rare fallback for items without a library identifier.
                 let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "dat"
-                data = fallback
-                name = "DropSwift_\(stamp)_\(index).\(ext)"
+                let name = "DropSwift_\(stamp)_\(index).\(ext)"
+                transferCurrentName = name
+                do {
+                    try await uploadData(data, filename: name)
+                    transferCompleted += 1
+                } catch {
+                    if !Task.isCancelled { failures += 1 }
+                }
             } else {
                 failures += 1
-                continue
             }
 
-            transferCurrentName = name
-            do {
-                try await uploadData(data, filename: name)
-                transferCompleted += 1
-            } catch {
-                failures += 1
-            }
+            if Task.isCancelled { break }
         }
 
         isTransferring = false
         transferFileFraction = 0
-        transferResult = failures == 0
-            ? "Sent \(transferCompleted) item(s) to \(serverName)."
-            : "Sent \(transferCompleted), failed \(failures). Check the connection and try again."
+        if Task.isCancelled {
+            transferResult = "Stopped. Sent \(transferCompleted) of \(transferTotal)."
+        } else {
+            transferResult = failures == 0
+                ? "Sent \(transferCompleted) item(s) to \(serverName)."
+                : "Sent \(transferCompleted), failed \(failures). Check the connection and try again."
+        }
     }
 
-    /// Fetches the original file bytes + original filename for a picked item via
-    /// PhotoKit, so metadata (EXIF, GPS, dates) is preserved exactly.
-    nonisolated private static func originalFile(for item: PhotosPickerItem) async -> (Data, String)? {
+    /// Writes a picked item's ORIGINAL resource to a temp file on disk, streaming
+    /// (low memory). Returns the temp URL + the original filename.
+    nonisolated private static func writeOriginalToTemp(for item: PhotosPickerItem) async -> (URL, String)? {
         guard let id = item.itemIdentifier else { return nil }
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
         guard let asset = assets.firstObject else { return nil }
@@ -195,21 +211,42 @@ final class ServerConnection: ObservableObject {
             return nil
         }
 
+        let name = resource.originalFilename
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + "-" + name)
+
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true   // allow fetching from iCloud
 
-        let box = DataBox()
-        let ok: Bool = await withCheckedContinuation { continuation in
-            PHAssetResourceManager.default().requestData(for: resource, options: options) { chunk in
-                box.append(chunk)
-            } completionHandler: { error in
-                continuation.resume(returning: error == nil)
+        do {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                PHAssetResourceManager.default().writeData(for: resource, toFile: tempURL, options: options) { error in
+                    if let error { cont.resume(throwing: error) } else { cont.resume() }
+                }
             }
+            return (tempURL, name)
+        } catch {
+            try? FileManager.default.removeItem(at: tempURL)
+            return nil
         }
-        return ok ? (box.value, resource.originalFilename) : nil
     }
 
-    /// Uploads raw bytes, reporting per-file progress into `transferFileFraction`.
+    /// Streams a file from disk to the laptop (constant low memory), reporting
+    /// per-file progress into `transferFileFraction`.
+    func uploadFile(at fileURL: URL, filename: String, toPath: String = "") async throws {
+        var request = URLRequest(url: try url("/api/upload", query: ["path": toPath]))
+        request.httpMethod = "POST"
+        request.setValue(filename, forHTTPHeaderField: "X-Filename")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+
+        let delegate = UploadProgressDelegate { [weak self] fraction in
+            Task { @MainActor in self?.transferFileFraction = fraction }
+        }
+        let (_, response) = try await session.upload(for: request, fromFile: fileURL, delegate: delegate)
+        try Self.check(response)
+    }
+
+    /// Small in-memory upload (fallback path only).
     func uploadData(_ data: Data, filename: String, toPath: String = "") async throws {
         var request = URLRequest(url: try url("/api/upload", query: ["path": toPath]))
         request.httpMethod = "POST"
@@ -231,13 +268,6 @@ final class ServerConnection: ObservableObject {
             throw ServerError.http(http.statusCode)
         }
     }
-}
-
-/// Collects streamed Data chunks. PhotoKit calls the data handler serially, so
-/// a simple lock-free accumulator is safe here.
-final class DataBox: @unchecked Sendable {
-    private(set) var value = Data()
-    func append(_ chunk: Data) { value.append(chunk) }
 }
 
 /// Reports upload byte-progress for the progress bar.

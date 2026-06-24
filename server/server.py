@@ -124,6 +124,7 @@ def safe_join(root: str, rel: str) -> str:
 class Handler(BaseHTTPRequestHandler):
     server_version = "DropSwift/1.0"
     protocol_version = "HTTP/1.1"   # keep-alive + better range streaming
+    timeout = 300                   # drop a stalled connection instead of hanging a thread
 
     # ---- helpers ---------------------------------------------------------
     def _send_json(self, obj, status=200):
@@ -260,16 +261,34 @@ class Handler(BaseHTTPRequestHandler):
 
         length = int(self.headers.get("Content-Length", 0))
         written = 0
-        with open(dest, "wb") as f:
-            remaining = length
-            while remaining > 0:
-                chunk = self.rfile.read(min(64 * 1024, remaining))
-                if not chunk:
-                    break
-                f.write(chunk)
-                written += len(chunk)
-                remaining -= len(chunk)
-        self._send_json({"ok": True, "name": filename, "bytes": written})
+        # Stream straight to disk in 1 MB chunks — constant memory even for
+        # multi-gigabyte files.
+        try:
+            with open(dest, "wb") as f:
+                remaining = length
+                while remaining > 0:
+                    chunk = self.rfile.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    written += len(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError, socket.timeout):
+            written = -1   # connection dropped / stalled mid-upload
+
+        # If the upload was cancelled / interrupted, discard the partial file.
+        if written != length:
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+            try:
+                self._send_json({"ok": False, "error": "incomplete upload"}, 400)
+            except Exception:
+                pass
+            return
+
+        self._send_json({"ok": True, "name": os.path.basename(dest), "bytes": written})
 
 
 def default_share_dir() -> str:
