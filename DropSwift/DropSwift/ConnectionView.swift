@@ -92,7 +92,8 @@ struct ConnectionView: View {
                     }
                 }
             }
-            .navigationTitle("DropSwift")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .onAppear { discovery.start() }
             .onDisappear { discovery.stop() }
         }
