@@ -37,6 +37,12 @@ final class ServerConnection: ObservableObject {
     @Published var serverName = ""
     @Published var lastError: String?
 
+    /// Set true when the background heartbeat loses contact — drives the in-app
+    /// "disconnected" popup.
+    @Published var didDisconnectUnexpectedly = false
+
+    private var heartbeat: Task<Void, Never>?
+
     // Transfer progress (observed by the UI for the progress bar).
     @Published var isTransferring = false
     @Published var transferTotal = 0
@@ -91,12 +97,14 @@ final class ServerConnection: ObservableObject {
     /// Pings the server and records whether we're connected.
     func connect() async {
         lastError = nil
+        didDisconnectUnexpectedly = false
         do {
             let (data, response) = try await session.data(from: try url("/api/health"))
             try Self.check(response)
             let health = try JSONDecoder().decode(Health.self, from: data)
             serverName = health.name
             isConnected = true
+            startHeartbeat()
         } catch {
             isConnected = false
             serverName = ""
@@ -106,9 +114,59 @@ final class ServerConnection: ObservableObject {
 
     /// Drops the current connection (the computer stays discoverable).
     func disconnect() {
+        stopHeartbeat()
         isConnected = false
         serverName = ""
         lastError = nil
+    }
+
+    // MARK: - Background heartbeat
+
+    /// Lightweight keep-alive: a tiny `/api/health` GET every few seconds while
+    /// connected. Two misses in a row → mark disconnected and raise the popup.
+    private func startHeartbeat() {
+        heartbeat?.cancel()
+        heartbeat = Task { [weak self] in
+            var failures = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(6))
+                if Task.isCancelled { break }
+                guard let self else { break }
+                if await self.ping() {
+                    failures = 0
+                } else {
+                    failures += 1
+                    if failures >= 2 {
+                        self.isConnected = false
+                        self.serverName = ""
+                        self.didDisconnectUnexpectedly = true
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    private func stopHeartbeat() {
+        heartbeat?.cancel()
+        heartbeat = nil
+    }
+
+    /// A single small, short-timeout health check. Returns true if reachable.
+    private func ping() async -> Bool {
+        guard let healthURL = try? url("/api/health") else { return false }
+        var request = URLRequest(url: healthURL)
+        request.timeoutInterval = 8
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (_, response) = try await session.data(for: request)
+            if let http = response as? HTTPURLResponse {
+                return (200..<300).contains(http.statusCode)
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Lists a folder on the laptop.

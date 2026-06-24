@@ -25,6 +25,11 @@ struct ContentView: View {
         }
         .tint(M3(scheme).primary)
         .environmentObject(server)
+        .alert("Disconnected", isPresented: $server.didDisconnectUnexpectedly) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Lost connection to your computer. Make sure the DropSwift server is running and both devices are on the same Wi-Fi.")
+        }
     }
 }
 
