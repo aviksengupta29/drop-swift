@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var server = ServerConnection()
 
     var body: some View {
@@ -29,6 +30,11 @@ struct ContentView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text("Lost connection to your computer. Make sure the DropSwift server is running and both devices are on the same Wi-Fi.")
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                Task { await server.checkNow() }
+            }
         }
     }
 }

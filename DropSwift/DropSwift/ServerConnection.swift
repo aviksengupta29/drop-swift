@@ -57,17 +57,29 @@ final class ServerConnection: ObservableObject {
         return (Double(transferCompleted) + transferFileFraction) / Double(transferTotal)
     }
 
-    private let session: URLSession
+    private let session: URLSession       // transfers (waits for connectivity)
+    private let pingSession: URLSession   // heartbeat (fails fast)
 
     init() {
         let d = UserDefaults.standard
         self.host = d.string(forKey: "dropswift.host") ?? ""
         self.port = d.string(forKey: "dropswift.port") ?? "8080"
+
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 120              // idle timeout between packets
         config.timeoutIntervalForResource = 60 * 60 * 24    // allow very large transfers
         config.waitsForConnectivity = true
         self.session = URLSession(configuration: config)
+
+        // Dedicated session for health pings: ephemeral (no connection reuse /
+        // caching) and fails fast so a dropped server is detected quickly.
+        let ping = URLSessionConfiguration.ephemeral
+        ping.timeoutIntervalForRequest = 5
+        ping.timeoutIntervalForResource = 6
+        ping.waitsForConnectivity = false
+        ping.requestCachePolicy = .reloadIgnoringLocalCacheData
+        ping.urlCache = nil
+        self.pingSession = URLSession(configuration: ping)
     }
 
     private func save() {
@@ -129,7 +141,7 @@ final class ServerConnection: ObservableObject {
         heartbeat = Task { [weak self] in
             var failures = 0
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(6))
+                try? await Task.sleep(for: .seconds(4))
                 if Task.isCancelled { break }
                 guard let self else { break }
                 if await self.ping() {
@@ -137,9 +149,7 @@ final class ServerConnection: ObservableObject {
                 } else {
                     failures += 1
                     if failures >= 2 {
-                        self.isConnected = false
-                        self.serverName = ""
-                        self.didDisconnectUnexpectedly = true
+                        self.markDisconnected()
                         break
                     }
                 }
@@ -152,14 +162,30 @@ final class ServerConnection: ObservableObject {
         heartbeat = nil
     }
 
-    /// A single small, short-timeout health check. Returns true if reachable.
+    private func markDisconnected() {
+        stopHeartbeat()
+        isConnected = false
+        serverName = ""
+        didDisconnectUnexpectedly = true
+    }
+
+    /// Immediate health check — used when the app returns to the foreground
+    /// (the heartbeat is suspended while backgrounded).
+    func checkNow() async {
+        guard isConnected else { return }
+        if !(await ping()) {
+            // confirm with one quick retry to avoid a false positive
+            if !(await ping()) { markDisconnected() }
+        }
+    }
+
+    /// A single small, short-timeout health check on the fast ping session.
     private func ping() async -> Bool {
         guard let healthURL = try? url("/api/health") else { return false }
         var request = URLRequest(url: healthURL)
-        request.timeoutInterval = 8
-        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 5
         do {
-            let (_, response) = try await session.data(for: request)
+            let (_, response) = try await pingSession.data(for: request)
             if let http = response as? HTTPURLResponse {
                 return (200..<300).contains(http.statusCode)
             }
