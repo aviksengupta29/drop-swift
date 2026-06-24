@@ -61,10 +61,11 @@ extension EnvironmentValues {
 /// Used by all three tabs so they're symmetrical.
 struct M3Scaffold<Content: View>: View {
     @Environment(\.colorScheme) private var scheme
-    let title: String
+    var title: String = ""
     var showLogo: Bool = false
     var showBack: Bool = false
     var onBack: (() -> Void)? = nil
+    var topBar: Bool = true
     var scrolls: Bool = true
     @ViewBuilder var content: () -> Content
 
@@ -73,7 +74,9 @@ struct M3Scaffold<Content: View>: View {
         ZStack(alignment: .top) {
             m3.surface.ignoresSafeArea()
             VStack(spacing: 0) {
-                M3TopAppBar(title: title, showLogo: showLogo, showBack: showBack, onBack: onBack)
+                if topBar {
+                    M3TopAppBar(title: title, showLogo: showLogo, showBack: showBack, onBack: onBack)
+                }
                 if scrolls {
                     ScrollView {
                         content()
@@ -84,6 +87,7 @@ struct M3Scaffold<Content: View>: View {
                     }
                 } else {
                     content()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }

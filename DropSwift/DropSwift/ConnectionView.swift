@@ -15,9 +15,28 @@ struct ConnectionView: View {
     @State private var showManual = false
 
     var body: some View {
-        M3Scaffold(title: "DropSwift", showLogo: true) {
+        M3Scaffold(topBar: false) {
             let m3 = M3(scheme)
             VStack(alignment: .leading, spacing: 16) {
+
+                // Centered hero: logo + big title
+                VStack(spacing: 12) {
+                    Image("AppLogo")
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 88, height: 88)
+                        .shadow(color: m3.primary.opacity(0.35), radius: 14, y: 6)
+                    Text("DropSwift")
+                        .font(.system(size: 32, weight: .bold))
+                        .foregroundStyle(m3.onSurface)
+                    Text("Send files between your phone and computer")
+                        .font(.system(size: 14))
+                        .foregroundStyle(m3.onSurfaceVariant)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 28)
+                .padding(.bottom, 12)
 
                 // Discovered computers
                 M3SectionHeader(title: "Computers on this Wi-Fi")

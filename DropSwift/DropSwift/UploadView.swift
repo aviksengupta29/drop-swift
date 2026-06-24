@@ -15,13 +15,19 @@ struct UploadView: View {
     @State private var sendTask: Task<Void, Never>?
 
     var body: some View {
-        M3Scaffold(title: "Send", showLogo: true) {
+        M3Scaffold(title: "Send", showLogo: true, scrolls: false) {
             let m3 = M3(scheme)
-            if server.isConnected {
-                content(m3)
-            } else {
-                notConnected(m3)
+            VStack {
+                Spacer(minLength: 0)
+                if server.isConnected {
+                    content(m3)
+                } else {
+                    notConnected(m3)
+                }
+                Spacer(minLength: 0)
             }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 70)   // sit above the floating tab bar
         }
     }
 
@@ -114,7 +120,6 @@ struct UploadView: View {
 
     private func notConnected(_ m3: M3) -> some View {
         VStack(spacing: 14) {
-            Spacer(minLength: 60)
             Image(systemName: "wifi.slash").font(.system(size: 48)).foregroundStyle(m3.onSurfaceVariant)
             Text("Not connected").font(.system(size: 18, weight: .semibold)).foregroundStyle(m3.onSurface)
             Text("Connect to your computer on the Connect tab first.")
