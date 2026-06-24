@@ -61,6 +61,12 @@ final class Discovery: ObservableObject {
         isSearching = false
     }
 
+    /// Clears the current results and scans again from scratch.
+    func refresh() {
+        servers.removeAll()
+        start()
+    }
+
     // MARK: - Internal
 
     private func handle(_ results: Set<NWBrowser.Result>) {

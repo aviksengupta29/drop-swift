@@ -39,8 +39,27 @@ struct ConnectionView: View {
                 .padding(.top, 28)
                 .padding(.bottom, 12)
 
-                // Discovered computers
-                M3SectionHeader(title: "Computers on this Wi-Fi")
+                // Discovered computers (with a refresh button)
+                HStack(spacing: 4) {
+                    Text("COMPUTERS ON THIS WI-FI")
+                        .font(.system(size: 12, weight: .semibold))
+                        .tracking(0.6)
+                        .foregroundStyle(m3.onSurfaceVariant)
+                    if discovery.isSearching {
+                        ProgressView().controlSize(.mini)
+                    }
+                    Spacer()
+                    Button { discovery.refresh() } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(m3.primary)
+                            .frame(width: 32, height: 32)
+                            .background(m3.primaryContainer.opacity(0.5), in: Circle())
+                    }
+                }
+                .padding(.leading, 8)
+                .padding(.top, 6)
+
                 M3Card(padding: 8) {
                     VStack(spacing: 0) {
                         if discovery.servers.isEmpty {
