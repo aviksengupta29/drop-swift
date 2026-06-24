@@ -72,33 +72,41 @@ struct MediaCell: View {
     private var kind: MediaKind { MediaKind.of(file.name) }
 
     var body: some View {
-        ZStack {
-            Rectangle().fill(Color.gray.opacity(0.14))
-
-            if let image {
-                Image(uiImage: image).resizable().scaledToFill()
-            } else if kind == .other {
-                VStack(spacing: 6) {
-                    Image(systemName: "doc.fill").font(.title2)
-                    Text(file.name).font(.caption2).lineLimit(2).multilineTextAlignment(.center)
+        Color.clear
+            .aspectRatio(1, contentMode: .fit)          // perfect square slot
+            .overlay {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else if kind == .other {
+                    ZStack {
+                        Rectangle().fill(Color.gray.opacity(0.15))
+                        VStack(spacing: 4) {
+                            Image(systemName: "doc.fill").font(.title3)
+                            Text(file.name).font(.caption2).lineLimit(2)
+                                .multilineTextAlignment(.center)
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(4)
+                    }
+                } else {
+                    ZStack {
+                        Rectangle().fill(Color.gray.opacity(0.12))
+                        ProgressView()
+                    }
                 }
-                .foregroundStyle(.secondary)
-                .padding(6)
-            } else {
-                ProgressView()
             }
-
-            if kind == .video {
-                Image(systemName: "play.fill")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(7)
-                    .background(.black.opacity(0.45), in: Circle())
+            .overlay(alignment: .bottomLeading) {
+                if kind == .video {
+                    Image(systemName: "play.fill")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.6), radius: 2)
+                        .padding(6)
+                }
             }
-        }
-        .aspectRatio(1, contentMode: .fill)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .task { await load() }
+            .clipped()                                   // crop overflow to the square
+            .contentShape(Rectangle())
+            .task { await load() }
     }
 
     private func load() async {
@@ -123,15 +131,17 @@ struct MediaCell: View {
 struct FolderCell: View {
     let name: String
     var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "folder.fill")
-                .font(.system(size: 38))
-                .foregroundStyle(Brand.violet)
-            Text(name).font(.caption).lineLimit(1).foregroundStyle(.primary)
-        }
-        .frame(maxWidth: .infinity)
-        .aspectRatio(1, contentMode: .fill)
-        .background(Color.gray.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        Color.gray.opacity(0.14)
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                VStack(spacing: 6) {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 34))
+                        .foregroundStyle(Brand.violet)
+                    Text(name).font(.caption2).lineLimit(1)
+                        .foregroundStyle(.primary).padding(.horizontal, 6)
+                }
+            }
     }
 }
 
@@ -143,52 +153,80 @@ struct SelectedMedia: Identifiable {
     var id: String { path }
 }
 
-struct MediaViewer: View {
+/// Full-screen, swipeable viewer — flick left/right between photos & videos,
+/// pinch to zoom photos, videos play in place. Like the Photos app.
+struct MediaPager: View {
     @EnvironmentObject var server: ServerConnection
-    let media: SelectedMedia
+    let items: [SelectedMedia]
+    @State private var index: Int
     @Environment(\.dismiss) private var dismiss
 
     @State private var shareURL: URL?
     @State private var showShare = false
 
+    init(items: [SelectedMedia], startIndex: Int) {
+        self.items = items
+        _index = State(initialValue: startIndex)
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             Color.black.ignoresSafeArea()
 
-            switch MediaKind.of(media.name) {
-            case .video:
-                if let url = server.fileURL(path: media.path) {
-                    VideoPlayerView(url: url)
+            TabView(selection: $index) {
+                ForEach(Array(items.enumerated()), id: \.offset) { i, media in
+                    MediaPage(media: media).tag(i)
                 }
-            case .image:
-                ZoomableImage(path: media.path)
-            case .other:
-                ProgressView().tint(.white)
             }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .ignoresSafeArea()
 
             HStack {
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark.circle.fill")
+                Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
+                Spacer()
+                if items.count > 1 {
+                    Text("\(index + 1) of \(items.count)")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.85))
                 }
                 Spacer()
-                Button { Task { await share() } } label: {
-                    Image(systemName: "square.and.arrow.up.circle.fill")
-                }
+                Button { Task { await share() } } label: { Image(systemName: "square.and.arrow.up.circle.fill") }
             }
-            .font(.system(size: 30))
+            .font(.system(size: 28))
             .foregroundStyle(.white.opacity(0.9))
-            .padding(.horizontal, 18)
-            .padding(.top, 12)
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
         }
+        .statusBarHidden(true)
         .sheet(isPresented: $showShare) {
             if let shareURL { ShareSheet(items: [shareURL]) }
         }
     }
 
     private func share() async {
+        let media = items[index]
         if let url = try? await server.download(path: media.path, name: media.name) {
             shareURL = url
             showShare = true
+        }
+    }
+}
+
+/// One page in the pager: a zoomable photo or an in-place video player.
+struct MediaPage: View {
+    @EnvironmentObject var server: ServerConnection
+    let media: SelectedMedia
+
+    var body: some View {
+        switch MediaKind.of(media.name) {
+        case .video:
+            if let url = server.fileURL(path: media.path) {
+                VideoPlayerView(url: url)
+            } else {
+                Color.black
+            }
+        default:
+            ZoomableImage(path: media.path)
         }
     }
 }
@@ -202,9 +240,7 @@ struct VideoPlayerView: View {
         VideoPlayer(player: player)
             .ignoresSafeArea()
             .onAppear {
-                let p = AVPlayer(url: url)
-                player = p
-                p.play()
+                if player == nil { player = AVPlayer(url: url) }
             }
             .onDisappear { player?.pause() }
     }

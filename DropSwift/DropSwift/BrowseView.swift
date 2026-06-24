@@ -28,6 +28,13 @@ struct BrowseView: View {
     }
 }
 
+/// Identifies a full-screen pager presentation (the media list + start index).
+struct PagerData: Identifiable {
+    let id = UUID()
+    let items: [SelectedMedia]
+    let start: Int
+}
+
 /// One folder shown as a gallery grid.
 struct GalleryView: View {
     @EnvironmentObject var server: ServerConnection
@@ -37,23 +44,29 @@ struct GalleryView: View {
     @State private var items: [RemoteFile] = []
     @State private var loading = false
     @State private var error: String?
-    @State private var selected: SelectedMedia?
+    @State private var pager: PagerData?
 
     // Download/share state (for non-media files).
     @State private var shareURL: URL?
     @State private var showShare = false
 
-    private let columns = [GridItem(.adaptive(minimum: 108), spacing: 6)]
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
 
     private var folders: [RemoteFile] { items.filter { $0.isDir } }
     private var files: [RemoteFile] { items.filter { !$0.isDir } }
+
+    /// All viewable photos/videos in this folder, in display order.
+    private var mediaItems: [SelectedMedia] {
+        files.filter { MediaKind.of($0.name) != .other }
+            .map { SelectedMedia(path: childPath($0.name), name: $0.name) }
+    }
 
     var body: some View {
         ScrollView {
             if let error {
                 Text(error).foregroundStyle(.orange).padding()
             }
-            LazyVGrid(columns: columns, spacing: 6) {
+            LazyVGrid(columns: columns, spacing: 2) {
                 ForEach(folders) { folder in
                     NavigationLink {
                         GalleryView(path: childPath(folder.name), title: folder.name)
@@ -71,7 +84,6 @@ struct GalleryView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(6)
 
             if items.isEmpty && !loading {
                 ContentUnavailableView("Empty folder", systemImage: "tray")
@@ -84,8 +96,8 @@ struct GalleryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await load() }
         .task { await load() }
-        .fullScreenCover(item: $selected) { media in
-            MediaViewer(media: media)
+        .fullScreenCover(item: $pager) { data in
+            MediaPager(items: data.items, startIndex: data.start)
         }
         .sheet(isPresented: $showShare) {
             if let shareURL { ShareSheet(items: [shareURL]) }
@@ -105,8 +117,8 @@ struct GalleryView: View {
                     showShare = true
                 }
             }
-        } else {
-            selected = SelectedMedia(path: p, name: file.name)
+        } else if let start = mediaItems.firstIndex(where: { $0.path == p }) {
+            pager = PagerData(items: mediaItems, start: start)
         }
     }
 
