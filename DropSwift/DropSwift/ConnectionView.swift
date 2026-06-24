@@ -13,6 +13,7 @@ struct ConnectionView: View {
     @StateObject private var discovery = Discovery()
     @State private var connecting = false
     @State private var showManual = false
+    @State private var glow = false
 
     var body: some View {
         M3Scaffold(topBar: false) {
@@ -71,20 +72,10 @@ struct ConnectionView: View {
                     }
                 }
 
-                // Status
-                M3SectionHeader(title: "Status")
-                M3Card {
-                    HStack(spacing: 12) {
-                        Circle()
-                            .fill(statusColor(m3))
-                            .frame(width: 10, height: 10)
-                        Text(statusText)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(m3.onSurface)
-                        Spacer()
-                        if connecting { ProgressView().tint(m3.primary) }
-                    }
-                }
+                // Status pill — glows green when connected
+                statusPill(m3)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
 
                 // Manual entry
                 M3OutlinedButton(title: showManual ? "Hide manual entry" : "Enter address manually",
@@ -129,10 +120,39 @@ struct ConnectionView: View {
         return "Not connected"
     }
 
-    private func statusColor(_ m3: M3) -> Color {
-        if server.isConnected { return .green }
-        if server.lastError != nil { return m3.error }
-        return m3.outline
+    /// Pill showing connection status; when connected its border glows green
+    /// with a soft pulse.
+    private func statusPill(_ m3: M3) -> some View {
+        let connected = server.isConnected
+        let green = Color(red: 0.18, green: 0.80, blue: 0.42)
+        return HStack(spacing: 9) {
+            if connecting {
+                ProgressView().controlSize(.small)
+            } else {
+                Circle()
+                    .fill(connected ? green : (server.lastError != nil ? m3.error : m3.outline))
+                    .frame(width: 9, height: 9)
+                    .shadow(color: connected ? green : .clear, radius: connected ? 4 : 0)
+            }
+            Text(statusText)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(m3.onSurface)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(Capsule().fill(m3.surfaceContainerHigh))
+        .overlay(
+            Capsule().strokeBorder(
+                connected ? green : m3.outlineVariant,
+                lineWidth: connected ? 1.8 : 1)
+        )
+        .shadow(color: connected ? green.opacity(glow ? 0.8 : 0.25) : .clear,
+                radius: connected ? (glow ? 16 : 5) : 0)
+        .animation(connected ? .easeInOut(duration: 1.3).repeatForever(autoreverses: true) : .default,
+                   value: glow)
+        .onAppear { glow = true }
+        .onChange(of: connected) { _, now in if now { glow = true } }
     }
 
     private func connect(to found: DiscoveredServer) async {
