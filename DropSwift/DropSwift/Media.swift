@@ -196,7 +196,16 @@ struct MediaPager: View {
                     .onEnded { v in
                         if v.translation.height > 160,
                            v.translation.height > abs(v.translation.width) {
-                            dismiss()
+                            // Slide the content the rest of the way off, then
+                            // dismiss WITHOUT the system cover animation — avoids
+                            // the "second window closing" double effect.
+                            withAnimation(.easeOut(duration: 0.22)) { dragOffset = 1500 }
+                            Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(220))
+                                var t = Transaction()
+                                t.disablesAnimations = true
+                                withTransaction(t) { dismiss() }
+                            }
                         } else {
                             withAnimation(.spring(response: 0.3)) { dragOffset = 0 }
                         }
