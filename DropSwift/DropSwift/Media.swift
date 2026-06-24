@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import Combine
 import AVKit
 import ImageIO
 
@@ -163,15 +164,18 @@ struct MediaPager: View {
 
     @State private var shareURL: URL?
     @State private var showShare = false
+    @State private var dragOffset: CGFloat = 0
 
     init(items: [SelectedMedia], startIndex: Int) {
         self.items = items
         _index = State(initialValue: startIndex)
     }
 
+    private var bgOpacity: Double { max(0, 1 - Double(dragOffset) / 500) }
+
     var body: some View {
         ZStack(alignment: .top) {
-            Color.black.ignoresSafeArea()
+            Color.black.opacity(bgOpacity).ignoresSafeArea()
 
             TabView(selection: $index) {
                 ForEach(Array(items.enumerated()), id: \.offset) { i, media in
@@ -180,6 +184,27 @@ struct MediaPager: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .ignoresSafeArea()
+            .scaleEffect(1 - min(0.12, dragOffset / 2000))
+            .offset(y: dragOffset)
+            // Swipe DOWN to dismiss (like Photos). Only reacts to a clearly
+            // vertical-downward drag, so horizontal paging still works.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 14)
+                    .onChanged { v in
+                        if v.translation.height > 0,
+                           v.translation.height > abs(v.translation.width) {
+                            dragOffset = v.translation.height
+                        }
+                    }
+                    .onEnded { v in
+                        if v.translation.height > 160,
+                           v.translation.height > abs(v.translation.width) {
+                            dismiss()
+                        } else {
+                            withAnimation(.spring(response: 0.3)) { dragOffset = 0 }
+                        }
+                    }
+            )
 
             HStack {
                 Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
@@ -196,6 +221,7 @@ struct MediaPager: View {
             .foregroundStyle(.white.opacity(0.9))
             .padding(.horizontal, 16)
             .padding(.top, 10)
+            .opacity(dragOffset > 0 ? 0 : 1)
         }
         .statusBarHidden(true)
         .sheet(isPresented: $showShare) {
@@ -231,18 +257,110 @@ struct MediaPage: View {
     }
 }
 
-/// Streams and auto-plays a video.
+/// Drives an AVPlayer with custom (non-conflicting) controls.
+@MainActor
+final class VideoModel: ObservableObject {
+    let player = AVPlayer()
+    @Published var current: Double = 0
+    @Published var duration: Double = 0
+    @Published var isPlaying = false
+    var scrubbing = false
+    private var token: Any?
+
+    func load(_ url: URL) {
+        player.replaceCurrentItem(with: AVPlayerItem(url: url))
+        token = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.3, preferredTimescale: 600), queue: .main
+        ) { [weak self] time in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if !self.scrubbing { self.current = max(0, time.seconds) }
+                if let d = self.player.currentItem?.duration.seconds, d.isFinite, d > 0 {
+                    self.duration = d
+                }
+                self.isPlaying = self.player.rate > 0
+            }
+        }
+    }
+
+    func toggle() {
+        if player.rate > 0 { player.pause() } else { player.play() }
+        isPlaying = player.rate > 0
+    }
+
+    func seek(_ t: Double) {
+        player.seek(to: CMTime(seconds: t, preferredTimescale: 600))
+    }
+
+    func teardown() {
+        if let token { player.removeTimeObserver(token) }
+        token = nil
+        player.pause()
+    }
+}
+
+/// Renders the video frame with NO native controls (so nothing overlaps our
+/// own close/share buttons), then overlays a custom play button + scrubber.
+struct VideoSurface: UIViewControllerRepresentable {
+    let player: AVPlayer
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let vc = AVPlayerViewController()
+        vc.player = player
+        vc.showsPlaybackControls = false
+        vc.videoGravity = .resizeAspect
+        vc.allowsPictureInPicturePlayback = false
+        return vc
+    }
+    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {}
+}
+
 struct VideoPlayerView: View {
     let url: URL
-    @State private var player: AVPlayer?
+    @StateObject private var model = VideoModel()
+    @State private var showControls = true
 
     var body: some View {
-        VideoPlayer(player: player)
-            .ignoresSafeArea()
-            .onAppear {
-                if player == nil { player = AVPlayer(url: url) }
+        ZStack {
+            VideoSurface(player: model.player)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation { showControls.toggle() } }
+
+            if showControls {
+                Button { model.toggle() } label: {
+                    Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.white)
+                        .frame(width: 72, height: 72)
+                        .background(.black.opacity(0.35), in: Circle())
+                }
+
+                VStack {
+                    Spacer()
+                    HStack(spacing: 10) {
+                        Text(Self.fmt(model.current))
+                            .font(.caption2).monospacedDigit().foregroundStyle(.white)
+                        Slider(value: $model.current, in: 0...max(model.duration, 0.1)) { editing in
+                            model.scrubbing = editing
+                            if !editing { model.seek(model.current) }
+                        }
+                        .tint(.white)
+                        Text(Self.fmt(model.duration))
+                            .font(.caption2).monospacedDigit().foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 36)
+                }
             }
-            .onDisappear { player?.pause() }
+        }
+        .onAppear { model.load(url) }
+        .onDisappear { model.teardown() }
+    }
+
+    static func fmt(_ s: Double) -> String {
+        guard s.isFinite, s >= 0 else { return "0:00" }
+        let t = Int(s)
+        return String(format: "%d:%02d", t / 60, t % 60)
     }
 }
 
