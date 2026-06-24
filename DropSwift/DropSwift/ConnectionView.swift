@@ -115,10 +115,10 @@ struct ConnectionView: View {
                 }
                 .padding(.vertical, 2)
 
-                // Disconnect pill — only while connected; glows red, same size
+                // Disconnect pill — only while connected; steady red, same size
                 if server.isConnected {
                     Button { withAnimation { server.disconnect() } } label: {
-                        GlowingPill(glowColor: red, glowing: true,
+                        GlowingPill(glowColor: red, glowing: false,
                                     neutralBorder: red, fill: m3.surfaceContainerHigh) {
                             HStack(spacing: 8) {
                                 Image(systemName: "wifi.slash")
