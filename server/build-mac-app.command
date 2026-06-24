@@ -1,7 +1,8 @@
 #!/bin/bash
 #
-# Builds "DropSwift Server.app" and packages it into DropSwift-Server.dmg.
-# Double-click the app -> it starts the server and shows its IP + port.
+# Builds "DropSwift Server.app" — a native SwiftUI app with a Liquid-Glass UI
+# (logo, IP/port, folder picker) — and packages it into DropSwift-Server.dmg.
+# The app runs the bundled Python server.py underneath.
 #
 set -e
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -15,14 +16,14 @@ echo "Cleaning previous build..."
 rm -rf "$BUILD"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-# --- bundle the server code ------------------------------------------------
+# --- bundle the server code + assets --------------------------------------
 cp server.py "$APP/Contents/Resources/server.py"
 
-# --- app icon (if present) -------------------------------------------------
 ICON_SRC="../assets/AppIcon.icns"
-if [ -f "$ICON_SRC" ]; then
-    cp "$ICON_SRC" "$APP/Contents/Resources/AppIcon.icns"
-fi
+[ -f "$ICON_SRC" ] && cp "$ICON_SRC" "$APP/Contents/Resources/AppIcon.icns"
+
+LOGO_SRC="../DropSwift/DropSwift/Assets.xcassets/AppLogo.imageset/AppLogo.png"
+[ -f "$LOGO_SRC" ] && cp "$LOGO_SRC" "$APP/Contents/Resources/AppLogo.png"
 
 # --- Info.plist ------------------------------------------------------------
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -38,118 +39,21 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>         <string>APPL</string>
     <key>CFBundleShortVersionString</key>  <string>1.0</string>
     <key>CFBundleVersion</key>             <string>1</string>
-    <key>LSMinimumSystemVersion</key>      <string>11.0</string>
+    <key>LSMinimumSystemVersion</key>      <string>13.0</string>
     <key>NSHighResolutionCapable</key>     <true/>
 </dict>
 </plist>
 PLIST
 
-# --- the launcher executable ----------------------------------------------
-cat > "$APP/Contents/MacOS/DropSwiftServer" <<'LAUNCH'
-#!/bin/bash
-# DropSwift Server launcher: pick a save folder, start the server, then show a
-# status window with the IP + port. Uses only built-in macOS dialogs.
-
-HERE="$(cd "$(dirname "$0")" && pwd)"
-RES="$HERE/../Resources"
-OSA="/usr/bin/osascript"
-PORT=8080
-
-# Find a usable python3 (Finder gives apps a minimal PATH).
-PY=""
-for c in /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 \
-         "$HOME/anaconda3/bin/python3" /opt/anaconda3/bin/python3; do
-    if [ -x "$c" ]; then PY="$c"; break; fi
-done
-if [ -z "$PY" ]; then
-    "$OSA" -e 'display dialog "Python 3 was not found on this Mac. Install it from python.org, then try again." with title "DropSwift Server" buttons {"OK"} default button "OK" with icon caution'
-    exit 1
-fi
-
-# Remember the last chosen folder between launches.
-CONF="$HOME/Library/Application Support/DropSwift"
-mkdir -p "$CONF"
-FOLDER_FILE="$CONF/folder.txt"
-if [ -f "$FOLDER_FILE" ]; then LAST="$(cat "$FOLDER_FILE")"; else LAST="$HOME/Desktop/DropSwift"; fi
-[ -d "$LAST" ] || LAST="$HOME/Desktop/DropSwift"
-mkdir -p "$LAST"
-
-lan_ip() {
-    "$PY" -c "import socket
-s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-try:
-    s.connect(('8.8.8.8',80)); print(s.getsockname()[0])
-except Exception:
-    print('127.0.0.1')
-finally:
-    s.close()" 2>/dev/null
-}
-
-choose_folder() {
-"$OSA" <<ASCRIPT 2>/dev/null
-try
-    set d to (POSIX file "$LAST") as alias
-on error
-    set d to (path to desktop)
-end try
-set f to choose folder with prompt "Choose the folder where files from your phone will be saved:" default location d
-POSIX path of f
-ASCRIPT
-}
-
-start_server() {
-    pkill -f "server.py --dir" 2>/dev/null
-    pkill -f "dns-sd -R" 2>/dev/null
-    sleep 0.4
-    nohup "$PY" "$RES/server.py" --dir "$1" --port "$PORT" > /tmp/dropswift_server.log 2>&1 &
-    disown 2>/dev/null || true
-    sleep 1
-}
-
-# 1) Ask where to save incoming files (pre-filled with the last choice).
-SEL="$(choose_folder)"
-if [ -n "$SEL" ]; then FOLDER="${SEL%/}"; else FOLDER="$LAST"; fi
-printf '%s' "$FOLDER" > "$FOLDER_FILE"
-mkdir -p "$FOLDER"
-
-# 2) Start the server and show the status window.
-start_server "$FOLDER"
-IP="$(lan_ip)"
-
-while true; do
-    BTN="$("$OSA" <<ASCRIPT 2>/dev/null
-set msg to "DropSwift Server is running.
-
-IP address:   $IP
-Port:           $PORT
-Saving to:    $FOLDER
-
-On your phone, open DropSwift — it finds this Mac automatically. To enter it by hand, use the IP and port above."
-set r to display dialog msg with title "DropSwift Server" buttons {"Stop Server", "Change Folder…", "Keep Running"} default button "Keep Running"
-button returned of r
-ASCRIPT
-)"
-    case "$BTN" in
-        "Stop Server")
-            pkill -f "server.py --dir" 2>/dev/null
-            pkill -f "dns-sd -R" 2>/dev/null
-            "$OSA" -e 'display notification "DropSwift Server stopped." with title "DropSwift Server"' 2>/dev/null
-            break ;;
-        "Change Folder…")
-            SEL="$(choose_folder)"
-            if [ -n "$SEL" ]; then
-                FOLDER="${SEL%/}"
-                printf '%s' "$FOLDER" > "$FOLDER_FILE"
-                mkdir -p "$FOLDER"
-                start_server "$FOLDER"
-            fi ;;
-        *)
-            # Keep Running (or dismissed): leave the server running, exit.
-            break ;;
-    esac
-done
-LAUNCH
+# --- compile the native SwiftUI app ---------------------------------------
+echo "Compiling native macOS app..."
+xcrun swiftc -parse-as-library -O \
+    -o "$APP/Contents/MacOS/DropSwiftServer" \
+    macapp/DropSwiftServerApp.swift
 chmod +x "$APP/Contents/MacOS/DropSwiftServer"
+
+# Ad-hoc sign so it launches cleanly on Apple Silicon.
+codesign --force --deep --sign - "$APP" 2>/dev/null || true
 
 # --- package into a .dmg ---------------------------------------------------
 echo "Creating disk image..."
@@ -165,5 +69,5 @@ echo ""
 echo "============================================================"
 echo " Built: $(cd "$BUILD" && pwd)/DropSwift-Server.dmg"
 echo " Open the .dmg, drag 'DropSwift Server' to Applications,"
-echo " then double-click it to start the server."
+echo " then open it (right-click -> Open the first time)."
 echo "============================================================"
