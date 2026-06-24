@@ -26,6 +26,7 @@ struct UploadView: View {
                     )
                 }
             }
+            .background(BrandBackground())
             .navigationTitle("Send")
         }
     }

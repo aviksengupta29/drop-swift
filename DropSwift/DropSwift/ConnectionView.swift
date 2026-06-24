@@ -92,6 +92,8 @@ struct ConnectionView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(BrandBackground())
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { discovery.start() }

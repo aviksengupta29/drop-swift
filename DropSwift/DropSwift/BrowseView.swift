@@ -79,6 +79,7 @@ struct GalleryView: View {
             }
         }
         .overlay { if loading && items.isEmpty { ProgressView() } }
+        .background(BrandBackground())
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await load() }
