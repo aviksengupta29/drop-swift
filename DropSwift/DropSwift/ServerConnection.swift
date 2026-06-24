@@ -9,6 +9,7 @@ import Foundation
 import Combine
 import SwiftUI
 import PhotosUI
+import Photos
 
 /// Errors surfaced to the UI.
 enum ServerError: LocalizedError {
@@ -119,8 +120,8 @@ final class ServerConnection: ObservableObject {
         return dest
     }
 
-    /// Picks data out of each photo/video and uploads it, driving the progress
-    /// bar via the published transfer fields.
+    /// Sends each photo/video to the laptop, keeping the original filename and
+    /// preserving all metadata, driving the progress bar as it goes.
     func sendPhotos(_ items: [PhotosPickerItem]) async {
         isTransferring = true
         transferTotal = items.count
@@ -129,16 +130,32 @@ final class ServerConnection: ObservableObject {
         transferResult = nil
         var failures = 0
 
+        // Needed to read the original file + filename from the photo library.
+        if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
+            _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        }
+
         let stamp = Int(Date().timeIntervalSince1970)
         for (index, item) in items.enumerated() {
             transferFileFraction = 0
-            let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "dat"
-            let name = "DropSwift_\(stamp)_\(index).\(ext)"
+
+            let data: Data
+            let name: String
+            if let original = await Self.originalFile(for: item) {
+                // Original, untouched file: real name + full metadata.
+                (data, name) = original
+            } else if let fallback = try? await item.loadTransferable(type: Data.self) {
+                // Fallback if the library item isn't reachable.
+                let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "dat"
+                data = fallback
+                name = "DropSwift_\(stamp)_\(index).\(ext)"
+            } else {
+                failures += 1
+                continue
+            }
+
             transferCurrentName = name
             do {
-                guard let data = try await item.loadTransferable(type: Data.self) else {
-                    failures += 1; continue
-                }
                 try await uploadData(data, filename: name)
                 transferCompleted += 1
             } catch {
@@ -151,6 +168,33 @@ final class ServerConnection: ObservableObject {
         transferResult = failures == 0
             ? "Sent \(transferCompleted) item(s) to \(serverName)."
             : "Sent \(transferCompleted), failed \(failures). Check the connection and try again."
+    }
+
+    /// Fetches the original file bytes + original filename for a picked item via
+    /// PhotoKit, so metadata (EXIF, GPS, dates) is preserved exactly.
+    nonisolated private static func originalFile(for item: PhotosPickerItem) async -> (Data, String)? {
+        guard let id = item.itemIdentifier else { return nil }
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
+        guard let asset = assets.firstObject else { return nil }
+
+        let resources = PHAssetResource.assetResources(for: asset)
+        let preferred: PHAssetResourceType = asset.mediaType == .video ? .video : .photo
+        guard let resource = resources.first(where: { $0.type == preferred }) ?? resources.first else {
+            return nil
+        }
+
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = true   // allow fetching from iCloud
+
+        let box = DataBox()
+        let ok: Bool = await withCheckedContinuation { continuation in
+            PHAssetResourceManager.default().requestData(for: resource, options: options) { chunk in
+                box.append(chunk)
+            } completionHandler: { error in
+                continuation.resume(returning: error == nil)
+            }
+        }
+        return ok ? (box.value, resource.originalFilename) : nil
     }
 
     /// Uploads raw bytes, reporting per-file progress into `transferFileFraction`.
@@ -175,6 +219,13 @@ final class ServerConnection: ObservableObject {
             throw ServerError.http(http.statusCode)
         }
     }
+}
+
+/// Collects streamed Data chunks. PhotoKit calls the data handler serially, so
+/// a simple lock-free accumulator is safe here.
+final class DataBox: @unchecked Sendable {
+    private(set) var value = Data()
+    func append(_ chunk: Data) { value.append(chunk) }
 }
 
 /// Reports upload byte-progress for the progress bar.

@@ -36,7 +36,8 @@ struct UploadView: View {
 
                 PhotosPicker(
                     selection: $selection,
-                    matching: .any(of: [.images, .videos])
+                    matching: .any(of: [.images, .videos]),
+                    photoLibrary: .shared()
                 ) {
                     Label("Choose photos / videos", systemImage: "photo.on.rectangle.angled")
                         .font(.headline)

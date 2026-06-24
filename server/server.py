@@ -96,6 +96,20 @@ def lan_ip() -> str:
         s.close()
 
 
+def uniquify(path: str) -> str:
+    """If `path` exists, append ' (1)', ' (2)', ... before the extension so we
+    never overwrite a file that shares a name with an incoming one."""
+    if not os.path.exists(path):
+        return path
+    base, ext = os.path.splitext(path)
+    i = 1
+    while True:
+        candidate = "%s (%d)%s" % (base, i, ext)
+        if not os.path.exists(candidate):
+            return candidate
+        i += 1
+
+
 def safe_join(root: str, rel: str) -> str:
     """Resolve `rel` under `root`, refusing to escape the shared folder."""
     rel = rel.lstrip("/")
@@ -205,7 +219,7 @@ class Handler(BaseHTTPRequestHandler):
         filename = os.path.basename(filename)  # strip any path components
         dest_dir = safe_join(SHARE_ROOT, rel)
         os.makedirs(dest_dir, exist_ok=True)
-        dest = safe_join(dest_dir, filename)
+        dest = uniquify(safe_join(dest_dir, filename))
 
         length = int(self.headers.get("Content-Length", 0))
         written = 0
