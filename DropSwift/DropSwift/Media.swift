@@ -157,13 +157,10 @@ struct SelectedMedia: Identifiable {
 /// Full-screen, swipeable viewer — flick left/right between photos & videos,
 /// pinch to zoom photos, videos play in place. Like the Photos app.
 struct MediaPager: View {
-    @EnvironmentObject var server: ServerConnection
     let items: [SelectedMedia]
     @State private var index: Int
     @Environment(\.dismiss) private var dismiss
 
-    @State private var shareURL: URL?
-    @State private var showShare = false
     @State private var dragOffset: CGFloat = 0
 
     init(items: [SelectedMedia], startIndex: Int) {
@@ -206,35 +203,15 @@ struct MediaPager: View {
                     }
             )
 
-            HStack {
-                Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
-                Spacer()
-                if items.count > 1 {
-                    Text("\(index + 1) of \(items.count)")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-                Spacer()
-                Button { Task { await share() } } label: { Image(systemName: "square.and.arrow.up.circle.fill") }
+            if items.count > 1 {
+                Text("\(index + 1) of \(items.count)")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(.top, 14)
+                    .opacity(dragOffset > 0 ? 0 : 1)
             }
-            .font(.system(size: 28))
-            .foregroundStyle(.white.opacity(0.9))
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .opacity(dragOffset > 0 ? 0 : 1)
         }
         .statusBarHidden(true)
-        .sheet(isPresented: $showShare) {
-            if let shareURL { ShareSheet(items: [shareURL]) }
-        }
-    }
-
-    private func share() async {
-        let media = items[index]
-        if let url = try? await server.download(path: media.path, name: media.name) {
-            shareURL = url
-            showShare = true
-        }
     }
 }
 
