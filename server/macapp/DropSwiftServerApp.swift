@@ -152,7 +152,6 @@ final class ServerController: ObservableObject {
 struct ServerView: View {
     @Environment(\.colorScheme) private var scheme
     @EnvironmentObject var server: ServerController
-    @State private var glow = false
 
     var body: some View {
         let m3 = M3(scheme)
@@ -168,7 +167,7 @@ struct ServerView: View {
                     .font(.subheadline)
                     .foregroundStyle(m3.onSurfaceVariant)
 
-                statusPill(m3)
+                MacStatusPill(running: server.isRunning)
                 infoCard(m3)
 
                 HStack(spacing: 12) {
@@ -203,32 +202,6 @@ struct ServerView: View {
         }
         .frame(width: 92, height: 92)
         .shadow(color: M3(scheme).primary.opacity(0.35), radius: 14, y: 6)
-    }
-
-    /// Green glowing pill when running (matches the iOS connected pill).
-    private func statusPill(_ m3: M3) -> some View {
-        let running = server.isRunning
-        let green = Color(red: 0.18, green: 0.80, blue: 0.42)
-        return HStack(spacing: 9) {
-            Circle()
-                .fill(running ? green : Color.orange)
-                .frame(width: 9, height: 9)
-                .shadow(color: running ? green : .clear, radius: running ? 4 : 0)
-            Text(running ? "Running" : "Stopped")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(m3.onSurface)
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .background(Capsule().fill(m3.surfaceContainerHigh))
-        .overlay(Capsule().strokeBorder(running ? green : m3.outlineVariant,
-                                        lineWidth: running ? 1.8 : 1))
-        .shadow(color: running ? green.opacity(glow ? 0.8 : 0.25) : .clear,
-                radius: running ? (glow ? 16 : 5) : 0)
-        .animation(running ? .easeInOut(duration: 1.3).repeatForever(autoreverses: true) : .default,
-                   value: glow)
-        .onAppear { glow = true }
-        .onChange(of: server.isRunning) { _, now in if now { glow = true } }
     }
 
     private func infoCard(_ m3: M3) -> some View {
@@ -271,6 +244,45 @@ struct ServerView: View {
             .background(bg, in: Capsule())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Status pill, isolated so its animation never re-renders the rest of the UI.
+/// Steady green when running; flashing red boundary glow when stopped.
+struct MacStatusPill: View {
+    @Environment(\.colorScheme) private var scheme
+    let running: Bool
+    @State private var pulse = false
+
+    var body: some View {
+        let m3 = M3(scheme)
+        let green = Color(red: 0.18, green: 0.80, blue: 0.42)
+        let red = Color(red: 0.95, green: 0.26, blue: 0.30)
+        let color = running ? green : red
+
+        return HStack(spacing: 9) {
+            Circle().fill(color).frame(width: 9, height: 9)
+            Text(running ? "Running" : "Stopped")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(m3.onSurface)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 48)
+        .background(Capsule().fill(m3.surfaceContainerHigh))
+        .overlay(Capsule().strokeBorder(color, lineWidth: 1.8))
+        .shadow(color: running ? green.opacity(0.45) : red.opacity(pulse ? 0.9 : 0.2),
+                radius: running ? 7 : (pulse ? 16 : 4))
+        .onAppear { update() }
+        .onChange(of: running) { _, _ in update() }
+    }
+
+    private func update() {
+        if running {
+            withAnimation(.easeInOut(duration: 0.3)) { pulse = false }
+        } else {
+            pulse = false
+            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { pulse = true }
+        }
     }
 }
 
