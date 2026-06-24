@@ -314,7 +314,7 @@ struct VideoPlayerView: View {
 
                 VStack {
                     Spacer()
-                    HStack(spacing: 10) {
+                    HStack(spacing: 12) {
                         Text(Self.fmt(model.current))
                             .font(.caption2).monospacedDigit().foregroundStyle(.white)
                         Slider(value: $model.current, in: 0...max(model.duration, 0.1)) { editing in
@@ -325,8 +325,11 @@ struct VideoPlayerView: View {
                         Text(Self.fmt(model.duration))
                             .font(.caption2).monospacedDigit().foregroundStyle(.white)
                     }
-                    .padding(.horizontal, 22)
-                    .padding(.bottom, 36)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    .liquidGlass(Capsule())
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 30)
                 }
             }
         }

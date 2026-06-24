@@ -45,6 +45,18 @@ struct M3 {
     var outlineVariant: Color     { c(0xCAC4D0, 0x49454F) }
 }
 
+extension View {
+    /// Liquid Glass on iOS 26+, frosted material as a fallback.
+    @ViewBuilder
+    func liquidGlass<S: Shape>(_ shape: S) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: shape)
+        } else {
+            self.background(.ultraThinMaterial, in: shape)
+        }
+    }
+}
+
 private struct M3Key: EnvironmentKey {
     static let defaultValue = M3(.light)
 }
