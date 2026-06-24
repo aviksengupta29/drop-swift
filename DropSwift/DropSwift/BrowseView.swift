@@ -2,26 +2,33 @@
 //  BrowseView.swift
 //  DropSwift
 //
-//  Gallery view of the laptop's shared folder: photo/video thumbnails in a
-//  grid, tap to view photos or play videos in-app, folders to navigate.
+//  Material 3 styled gallery: square photo/video thumbnails, tap to open a
+//  swipeable full-screen viewer, folders to navigate.
 //
 
 import SwiftUI
 
 struct BrowseView: View {
+    @Environment(\.colorScheme) private var scheme
     @EnvironmentObject var server: ServerConnection
 
     var body: some View {
         NavigationStack {
-            Group {
-                if server.isConnected {
-                    GalleryView(path: "", title: server.serverName.isEmpty ? "Laptop" : server.serverName)
-                } else {
-                    ContentUnavailableView(
-                        "Not connected",
-                        systemImage: "wifi.slash",
-                        description: Text("Connect to your computer on the Connect tab first.")
-                    )
+            if server.isConnected {
+                GalleryView(path: "",
+                            title: server.serverName.isEmpty ? "Browse" : server.serverName,
+                            isRoot: true)
+            } else {
+                let m3 = M3(scheme)
+                M3Scaffold(title: "Browse", showLogo: true) {
+                    VStack(spacing: 14) {
+                        Spacer(minLength: 60)
+                        Image(systemName: "wifi.slash").font(.system(size: 48)).foregroundStyle(m3.onSurfaceVariant)
+                        Text("Not connected").font(.system(size: 18, weight: .semibold)).foregroundStyle(m3.onSurface)
+                        Text("Connect to your computer on the Connect tab first.")
+                            .font(.system(size: 14)).foregroundStyle(m3.onSurfaceVariant)
+                            .multilineTextAlignment(.center)
+                    }
                 }
             }
         }
@@ -37,16 +44,17 @@ struct PagerData: Identifiable {
 
 /// One folder shown as a gallery grid.
 struct GalleryView: View {
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var server: ServerConnection
     let path: String
     let title: String
+    var isRoot: Bool = false
 
     @State private var items: [RemoteFile] = []
     @State private var loading = false
     @State private var error: String?
     @State private var pager: PagerData?
-
-    // Download/share state (for non-media files).
     @State private var shareURL: URL?
     @State private var showShare = false
 
@@ -54,47 +62,44 @@ struct GalleryView: View {
 
     private var folders: [RemoteFile] { items.filter { $0.isDir } }
     private var files: [RemoteFile] { items.filter { !$0.isDir } }
-
-    /// All viewable photos/videos in this folder, in display order.
     private var mediaItems: [SelectedMedia] {
         files.filter { MediaKind.of($0.name) != .other }
             .map { SelectedMedia(path: childPath($0.name), name: $0.name) }
     }
 
     var body: some View {
-        ScrollView {
-            if let error {
-                Text(error).foregroundStyle(.orange).padding()
-            }
-            LazyVGrid(columns: columns, spacing: 2) {
-                ForEach(folders) { folder in
-                    NavigationLink {
-                        GalleryView(path: childPath(folder.name), title: folder.name)
-                    } label: {
-                        FolderCell(name: folder.name)
-                    }
-                    .buttonStyle(.plain)
+        M3Scaffold(title: title, showLogo: isRoot, showBack: !isRoot,
+                   onBack: { dismiss() }, scrolls: false) {
+            ScrollView {
+                if let error {
+                    Text(error).foregroundStyle(M3(scheme).error).padding()
                 }
-                ForEach(files) { file in
-                    Button {
-                        tap(file)
-                    } label: {
-                        MediaCell(file: file, path: childPath(file.name))
+                LazyVGrid(columns: columns, spacing: 2) {
+                    ForEach(folders) { folder in
+                        NavigationLink {
+                            GalleryView(path: childPath(folder.name), title: folder.name)
+                        } label: {
+                            FolderCell(name: folder.name)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                    ForEach(files) { file in
+                        Button { tap(file) } label: {
+                            MediaCell(file: file, path: childPath(file.name))
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-            }
+                .padding(.bottom, 130)
 
-            if items.isEmpty && !loading {
-                ContentUnavailableView("Empty folder", systemImage: "tray")
-                    .padding(.top, 60)
+                if items.isEmpty && !loading {
+                    ContentUnavailableView("Empty folder", systemImage: "tray").padding(.top, 60)
+                }
             }
+            .overlay { if loading && items.isEmpty { ProgressView() } }
+            .refreshable { await load() }
         }
-        .overlay { if loading && items.isEmpty { ProgressView() } }
-        .background(BrandBackground())
-        .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
-        .refreshable { await load() }
+        .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
         .fullScreenCover(item: $pager) { data in
             MediaPager(items: data.items, startIndex: data.start)

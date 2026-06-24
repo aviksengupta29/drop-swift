@@ -2,127 +2,124 @@
 //  UploadView.swift
 //  DropSwift
 //
-//  Pick photos/videos and send them to the laptop, with a live progress bar.
+//  Material 3 styled Send screen with a live transfer progress card.
 //
 
 import SwiftUI
 import PhotosUI
 
 struct UploadView: View {
+    @Environment(\.colorScheme) private var scheme
     @EnvironmentObject var server: ServerConnection
     @State private var selection: [PhotosPickerItem] = []
     @State private var sendTask: Task<Void, Never>?
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if server.isConnected {
-                    content
-                } else {
-                    ContentUnavailableView(
-                        "Not connected",
-                        systemImage: "wifi.slash",
-                        description: Text("Connect to your computer on the Connect tab first.")
-                    )
-                }
+        M3Scaffold(title: "Send", showLogo: true) {
+            let m3 = M3(scheme)
+            if server.isConnected {
+                content(m3)
+            } else {
+                notConnected(m3)
             }
-            .background(BrandBackground())
-            .navigationTitle("Send")
         }
     }
 
-    private var content: some View {
-        ScrollView {
-            VStack(spacing: 22) {
-                BrandHeader(subtitle: "Send photos & videos to \(server.serverName)")
-
-                PhotosPicker(
-                    selection: $selection,
-                    maxSelectionCount: ServerConnection.maxBatch,
-                    matching: .any(of: [.images, .videos]),
-                    photoLibrary: .shared()
-                ) {
-                    Label("Choose photos / videos", systemImage: "photo.on.rectangle.angled")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Brand.violet)
-                .disabled(server.isTransferring)
-
-                Text("Up to \(ServerConnection.maxBatch) items per transfer.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                if server.isTransferring {
-                    transferCard
-                } else if !selection.isEmpty {
-                    Button {
-                        sendTask = Task {
-                            await server.sendPhotos(selection)
-                            selection = []
-                        }
-                    } label: {
-                        Label("Send \(selection.count) item(s)", systemImage: "paperplane.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Brand.indigo)
-                }
-
-                if let result = server.transferResult, !server.isTransferring {
-                    Label(result, systemImage: "checkmark.seal.fill")
-                        .font(.footnote)
-                        .foregroundStyle(.green)
+    private func content(_ m3: M3) -> some View {
+        VStack(spacing: 18) {
+            // Hero
+            M3Card {
+                VStack(spacing: 10) {
+                    Image(systemName: "square.and.arrow.up.on.square.fill")
+                        .font(.system(size: 44))
+                        .foregroundStyle(m3.primary)
+                    Text("Send to \(server.serverName)")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(m3.onSurface)
+                    Text("Photos & videos keep their original quality and metadata.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(m3.onSurfaceVariant)
                         .multilineTextAlignment(.center)
                 }
-
-                Spacer(minLength: 0)
+                .frame(maxWidth: .infinity)
             }
-            .padding()
+
+            PhotosPicker(
+                selection: $selection,
+                maxSelectionCount: ServerConnection.maxBatch,
+                matching: .any(of: [.images, .videos]),
+                photoLibrary: .shared()
+            ) {
+                HStack(spacing: 8) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                    Text("Choose photos / videos").font(.system(size: 15, weight: .semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .foregroundStyle(m3.onSecondaryContainer)
+                .background(m3.secondaryContainer, in: Capsule())
+            }
+            .disabled(server.isTransferring)
+
+            Text("Up to \(ServerConnection.maxBatch) items per transfer.")
+                .font(.system(size: 12))
+                .foregroundStyle(m3.onSurfaceVariant)
+
+            if server.isTransferring {
+                transferCard(m3)
+            } else if !selection.isEmpty {
+                M3FilledButton(title: "Send \(selection.count) item(s)", icon: "paperplane.fill") {
+                    sendTask = Task {
+                        await server.sendPhotos(selection)
+                        selection = []
+                    }
+                }
+            }
+
+            if let result = server.transferResult, !server.isTransferring {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+                    Text(result).font(.system(size: 13)).foregroundStyle(m3.onSurfaceVariant)
+                }
+                .multilineTextAlignment(.center)
+            }
         }
     }
 
-    /// The live transfer card with the progress bar.
-    private var transferCard: some View {
-        VStack(spacing: 14) {
-            HStack {
-                Text("Sending \(min(server.transferCompleted + 1, server.transferTotal)) of \(server.transferTotal)")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Text("\(Int(server.transferOverall * 100))%")
-                    .font(.subheadline.weight(.medium))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
+    private func transferCard(_ m3: M3) -> some View {
+        M3Card {
+            VStack(spacing: 14) {
+                HStack {
+                    Text("Sending \(min(server.transferCompleted + 1, server.transferTotal)) of \(server.transferTotal)")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(m3.onSurface)
+                    Spacer()
+                    Text("\(Int(server.transferOverall * 100))%")
+                        .font(.system(size: 15, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(m3.onSurfaceVariant)
+                }
+                M3LinearProgress(value: server.transferOverall)
+                Text(server.transferCurrentName)
+                    .font(.system(size: 12))
+                    .foregroundStyle(m3.onSurfaceVariant)
+                    .lineLimit(1).truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                M3OutlinedButton(title: "Cancel", icon: "xmark", role: .destructive) {
+                    sendTask?.cancel()
+                }
             }
-
-            ProgressView(value: server.transferOverall)
-                .tint(Brand.violet)
-                .scaleEffect(x: 1, y: 1.4, anchor: .center)
-
-            Text(server.transferCurrentName)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button(role: .destructive) {
-                sendTask?.cancel()
-            } label: {
-                Label("Cancel", systemImage: "xmark.circle")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
         }
-        .padding()
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Brand.gradient.opacity(0.25), lineWidth: 1)
-        )
+    }
+
+    private func notConnected(_ m3: M3) -> some View {
+        VStack(spacing: 14) {
+            Spacer(minLength: 60)
+            Image(systemName: "wifi.slash").font(.system(size: 48)).foregroundStyle(m3.onSurfaceVariant)
+            Text("Not connected").font(.system(size: 18, weight: .semibold)).foregroundStyle(m3.onSurface)
+            Text("Connect to your computer on the Connect tab first.")
+                .font(.system(size: 14)).foregroundStyle(m3.onSurfaceVariant)
+                .multilineTextAlignment(.center)
+        }
     }
 }
