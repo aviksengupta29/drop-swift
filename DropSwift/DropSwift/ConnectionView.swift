@@ -16,6 +16,11 @@ struct ConnectionView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    BrandHeader(subtitle: "Send files between your phone and computer")
+                        .listRowBackground(Color.clear)
+                }
+
                 // MARK: Auto-discovered computers
                 Section {
                     if discovery.servers.isEmpty {

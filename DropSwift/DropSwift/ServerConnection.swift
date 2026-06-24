@@ -7,6 +7,8 @@
 
 import Foundation
 import Combine
+import SwiftUI
+import PhotosUI
 
 /// Errors surfaced to the UI.
 enum ServerError: LocalizedError {
@@ -33,6 +35,20 @@ final class ServerConnection: ObservableObject {
     @Published var isConnected = false
     @Published var serverName = ""
     @Published var lastError: String?
+
+    // Transfer progress (observed by the UI for the progress bar).
+    @Published var isTransferring = false
+    @Published var transferTotal = 0
+    @Published var transferCompleted = 0
+    @Published var transferCurrentName = ""
+    @Published var transferFileFraction: Double = 0   // 0...1 for the current file
+    @Published var transferResult: String?
+
+    /// Overall 0...1 progress across the whole batch.
+    var transferOverall: Double {
+        guard transferTotal > 0 else { return 0 }
+        return (Double(transferCompleted) + transferFileFraction) / Double(transferTotal)
+    }
 
     private let session: URLSession
 
@@ -103,13 +119,51 @@ final class ServerConnection: ObservableObject {
         return dest
     }
 
-    /// Uploads raw bytes to the laptop under the given remote folder.
-    func upload(data: Data, filename: String, toPath: String = "") async throws {
+    /// Picks data out of each photo/video and uploads it, driving the progress
+    /// bar via the published transfer fields.
+    func sendPhotos(_ items: [PhotosPickerItem]) async {
+        isTransferring = true
+        transferTotal = items.count
+        transferCompleted = 0
+        transferFileFraction = 0
+        transferResult = nil
+        var failures = 0
+
+        let stamp = Int(Date().timeIntervalSince1970)
+        for (index, item) in items.enumerated() {
+            transferFileFraction = 0
+            let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "dat"
+            let name = "DropSwift_\(stamp)_\(index).\(ext)"
+            transferCurrentName = name
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    failures += 1; continue
+                }
+                try await uploadData(data, filename: name)
+                transferCompleted += 1
+            } catch {
+                failures += 1
+            }
+        }
+
+        isTransferring = false
+        transferFileFraction = 0
+        transferResult = failures == 0
+            ? "Sent \(transferCompleted) item(s) to \(serverName)."
+            : "Sent \(transferCompleted), failed \(failures). Check the connection and try again."
+    }
+
+    /// Uploads raw bytes, reporting per-file progress into `transferFileFraction`.
+    func uploadData(_ data: Data, filename: String, toPath: String = "") async throws {
         var request = URLRequest(url: try url("/api/upload", query: ["path": toPath]))
         request.httpMethod = "POST"
         request.setValue(filename, forHTTPHeaderField: "X-Filename")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        let (_, response) = try await session.upload(for: request, from: data)
+
+        let delegate = UploadProgressDelegate { [weak self] fraction in
+            Task { @MainActor in self?.transferFileFraction = fraction }
+        }
+        let (_, response) = try await session.upload(for: request, from: data, delegate: delegate)
         try Self.check(response)
     }
 
@@ -120,5 +174,22 @@ final class ServerConnection: ObservableObject {
         guard (200..<300).contains(http.statusCode) else {
             throw ServerError.http(http.statusCode)
         }
+    }
+}
+
+/// Reports upload byte-progress for the progress bar.
+final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let onProgress: @Sendable (Double) -> Void
+
+    init(onProgress: @escaping @Sendable (Double) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    didSendBodyData bytesSent: Int64,
+                    totalBytesSent: Int64,
+                    totalBytesExpectedToSend: Int64) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        onProgress(min(1.0, Double(totalBytesSent) / Double(totalBytesExpectedToSend)))
     }
 }

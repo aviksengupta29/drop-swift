@@ -63,10 +63,23 @@ def main():
     subprocess.run(["iconutil", "-c", "icns", iconset,
                     "-o", os.path.join(HERE, "AppIcon.icns")], check=True)
 
+    # --- In-app logo: rounded tile with transparency, for use inside the app ---
+    logo = rounded(opaque.convert("RGBA"), int(1024 * 0.22))
+    logo_dir = os.path.join(REPO, "DropSwift", "DropSwift",
+                            "Assets.xcassets", "AppLogo.imageset")
+    os.makedirs(logo_dir, exist_ok=True)
+    logo.save(os.path.join(logo_dir, "AppLogo.png"))
+    with open(os.path.join(logo_dir, "Contents.json"), "w") as f:
+        f.write('{\n  "images" : [\n    {\n'
+                '      "filename" : "AppLogo.png",\n'
+                '      "idiom" : "universal"\n    }\n  ],\n'
+                '  "info" : { "author" : "xcode", "version" : 1 }\n}\n')
+
     print("Generated:")
     print("  iOS    :", os.path.join(IOS_DIR, "AppIcon-1024.png"))
     print("  macOS  :", os.path.join(HERE, "AppIcon.icns"))
     print("  Windows:", os.path.join(HERE, "dropswift.ico"))
+    print("  Logo   :", os.path.join(logo_dir, "AppLogo.png"))
 
 
 if __name__ == "__main__":
