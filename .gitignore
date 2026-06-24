@@ -16,6 +16,12 @@ zctest/
 # macOS
 .DS_Store
 
+# Icon render intermediates (regenerated from icon-master.svg via generate-icons.py)
+assets/icon-master.svg.png
+assets/preview.png
+assets/icns-preview.png
+assets/AppIcon.iconset/
+
 # Xcode
 xcuserdata/
 *.xcuserstate

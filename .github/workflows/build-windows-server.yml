@@ -29,6 +29,7 @@ jobs:
         run: >
           pyinstaller --onefile
           --name DropSwift-Server
+          --icon assets/dropswift.ico
           --collect-all zeroconf
           server/server.py
 
