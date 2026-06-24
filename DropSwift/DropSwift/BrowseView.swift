@@ -128,12 +128,24 @@ struct GalleryView: View {
     }
 
     private func load() async {
-        loading = true; error = nil
+        loading = true
+        defer { loading = false }
+        let server = self.server
+        let path = self.path
         do {
-            items = try await server.list(path: path).items
+            // Run the fetch in a detached task so SwiftUI cancelling the
+            // pull-to-refresh task doesn't abort the request mid-flight.
+            let listing = try await Task.detached(priority: .userInitiated) {
+                try await server.list(path: path)
+            }.value
+            items = listing.items
+            error = nil
+        } catch is CancellationError {
+            // Benign — keep showing the current files.
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            // Benign — keep showing the current files.
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
-        loading = false
     }
 }
