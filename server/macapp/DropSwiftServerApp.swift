@@ -11,25 +11,33 @@ import SwiftUI
 import AppKit
 import Darwin
 
-// MARK: - Brand
+// MARK: - Material 3 theme (matches the iOS app)
 
-enum Brand {
-    static let indigo = Color(red: 0.36, green: 0.09, blue: 1.0)
-    static let violet = Color(red: 0.69, green: 0.15, blue: 1.0)
-    static let pink   = Color(red: 0.95, green: 0.35, blue: 0.95)
+extension Color {
+    init(hex: UInt32) {
+        self.init(.sRGB,
+                  red: Double((hex >> 16) & 0xFF) / 255,
+                  green: Double((hex >> 8) & 0xFF) / 255,
+                  blue: Double(hex & 0xFF) / 255, opacity: 1)
+    }
 }
 
-// MARK: - Liquid glass helper (Liquid Glass on macOS 26, material before that)
+struct M3 {
+    let dark: Bool
+    init(_ scheme: ColorScheme) { dark = scheme == .dark }
+    private func c(_ l: UInt32, _ d: UInt32) -> Color { Color(hex: dark ? d : l) }
 
-extension View {
-    @ViewBuilder
-    func liquidCard<S: Shape>(_ shape: S) -> some View {
-        if #available(macOS 26.0, *) {
-            self.glassEffect(.regular, in: shape)
-        } else {
-            self.background(.ultraThinMaterial, in: shape)
-        }
-    }
+    var primary: Color { c(0x6750A4, 0xD0BCFF) }
+    var onPrimary: Color { c(0xFFFFFF, 0x381E72) }
+    var primaryContainer: Color { c(0xEADDFF, 0x4F378B) }
+    var secondaryContainer: Color { c(0xE8DEF8, 0x4A4458) }
+    var onSecondaryContainer: Color { c(0x1D192B, 0xE8DEF8) }
+    var error: Color { c(0xB3261E, 0xF2B8B5) }
+    var surface: Color { c(0xFEF7FF, 0x141218) }
+    var onSurface: Color { c(0x1D1B20, 0xE6E0E9) }
+    var onSurfaceVariant: Color { c(0x49454F, 0xCAC4D0) }
+    var surfaceContainerHigh: Color { c(0xECE6F0, 0x2B2930) }
+    var outlineVariant: Color { c(0xCAC4D0, 0x49454F) }
 }
 
 // MARK: - Server controller
@@ -139,89 +147,49 @@ final class ServerController: ObservableObject {
     }
 }
 
-// MARK: - Liquid background
-
-struct LiquidBackground: View {
-    @State private var animate = false
-
-    var body: some View {
-        ZStack {
-            LinearGradient(colors: [Brand.indigo, Brand.violet],
-                           startPoint: .topLeading, endPoint: .bottomTrailing)
-
-            blob(Brand.pink, 360).offset(x: animate ? -120 : -80, y: animate ? -160 : -120)
-            blob(Brand.indigo, 420).offset(x: animate ? 150 : 110, y: animate ? 180 : 140)
-            blob(.white.opacity(0.5), 240).offset(x: animate ? 120 : 80, y: animate ? -180 : -140)
-        }
-        .ignoresSafeArea()
-        .onAppear {
-            withAnimation(.easeInOut(duration: 7).repeatForever(autoreverses: true)) {
-                animate = true
-            }
-        }
-    }
-
-    private func blob(_ color: Color, _ size: CGFloat) -> some View {
-        Circle()
-            .fill(color)
-            .frame(width: size, height: size)
-            .blur(radius: 70)
-            .opacity(0.55)
-    }
-}
-
-// MARK: - Main view
+// MARK: - Main view (Material 3 — matches the iOS app)
 
 struct ServerView: View {
+    @Environment(\.colorScheme) private var scheme
     @EnvironmentObject var server: ServerController
+    @State private var glow = false
 
     var body: some View {
+        let m3 = M3(scheme)
         ZStack {
-            LiquidBackground()
+            m3.surface.ignoresSafeArea()
 
             VStack(spacing: 18) {
                 logo
                 Text("DropSwift Server")
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 25, weight: .bold))
+                    .foregroundStyle(m3.onSurface)
                 Text("Sharing files over your local Wi‑Fi")
                     .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(m3.onSurfaceVariant)
 
-                infoCard
+                statusPill(m3)
+                infoCard(m3)
 
                 HStack(spacing: 12) {
-                    Button(action: server.chooseFolder) {
-                        Label("Choose Folder", systemImage: "folder")
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white)
-                    .liquidCard(Capsule())
-
-                    Button(action: { server.isRunning ? server.stop() : server.start() }) {
-                        Label(server.isRunning ? "Stop" : "Start",
-                              systemImage: server.isRunning ? "stop.fill" : "play.fill")
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                            .foregroundStyle(.white)
-                    }
-                    .buttonStyle(.plain)
-                    .background(server.isRunning ? Color.red.opacity(0.9) : Color.white.opacity(0.22),
-                                in: Capsule())
+                    m3Button("Choose Folder", icon: "folder",
+                             bg: m3.secondaryContainer, fg: m3.onSecondaryContainer,
+                             action: server.chooseFolder)
+                    m3Button(server.isRunning ? "Stop" : "Start",
+                             icon: server.isRunning ? "stop.fill" : "play.fill",
+                             bg: server.isRunning ? m3.error : m3.primary, fg: m3.onPrimary,
+                             action: { server.isRunning ? server.stop() : server.start() })
                 }
-                .padding(.horizontal, 4)
 
                 Text("Open DropSwift on your phone — it finds this Mac automatically.")
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.8))
+                    .foregroundStyle(m3.onSurfaceVariant)
                     .multilineTextAlignment(.center)
                     .padding(.top, 2)
             }
             .padding(28)
         }
-        .frame(width: 420, height: 580)
+        .frame(width: 420, height: 600)
     }
 
     private var logo: some View {
@@ -231,60 +199,78 @@ struct ServerView: View {
                 Image(nsImage: img).resizable()
             } else {
                 Image(systemName: "arrow.left.arrow.right.circle.fill").resizable()
-                    .foregroundStyle(.white)
             }
         }
         .frame(width: 92, height: 92)
-        .shadow(color: .black.opacity(0.35), radius: 16, y: 8)
+        .shadow(color: M3(scheme).primary.opacity(0.35), radius: 14, y: 6)
     }
 
-    private var infoCard: some View {
-        VStack(spacing: 0) {
-            statusRow
-            Divider().overlay(.white.opacity(0.25))
-            row("IP Address", server.ip)
-            Divider().overlay(.white.opacity(0.25))
-            row("Port", String(server.port))
-            Divider().overlay(.white.opacity(0.25))
-            row("Saving to", server.folder.path)
-        }
-        .padding(.vertical, 6)
-        .liquidCard(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
-        )
-    }
-
-    private var statusRow: some View {
-        HStack {
+    /// Green glowing pill when running (matches the iOS connected pill).
+    private func statusPill(_ m3: M3) -> some View {
+        let running = server.isRunning
+        let green = Color(red: 0.18, green: 0.80, blue: 0.42)
+        return HStack(spacing: 9) {
             Circle()
-                .fill(server.isRunning ? Color.green : Color.orange)
-                .frame(width: 10, height: 10)
-                .shadow(color: server.isRunning ? .green : .orange, radius: 5)
-            Text(server.isRunning ? "Running" : "Stopped")
-                .font(.headline)
-                .foregroundStyle(.white)
-            Spacer()
+                .fill(running ? green : Color.orange)
+                .frame(width: 9, height: 9)
+                .shadow(color: running ? green : .clear, radius: running ? 4 : 0)
+            Text(running ? "Running" : "Stopped")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(m3.onSurface)
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
+        .background(Capsule().fill(m3.surfaceContainerHigh))
+        .overlay(Capsule().strokeBorder(running ? green : m3.outlineVariant,
+                                        lineWidth: running ? 1.8 : 1))
+        .shadow(color: running ? green.opacity(glow ? 0.8 : 0.25) : .clear,
+                radius: running ? (glow ? 16 : 5) : 0)
+        .animation(running ? .easeInOut(duration: 1.3).repeatForever(autoreverses: true) : .default,
+                   value: glow)
+        .onAppear { glow = true }
+        .onChange(of: server.isRunning) { _, now in if now { glow = true } }
     }
 
-    private func row(_ label: String, _ value: String) -> some View {
+    private func infoCard(_ m3: M3) -> some View {
+        VStack(spacing: 0) {
+            row(m3, "IP Address", server.ip)
+            Divider().overlay(m3.outlineVariant)
+            row(m3, "Port", String(server.port))
+            Divider().overlay(m3.outlineVariant)
+            row(m3, "Saving to", server.folder.path)
+        }
+        .padding(.vertical, 6)
+        .background(m3.surfaceContainerHigh,
+                    in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private func row(_ m3: M3, _ label: String, _ value: String) -> some View {
         HStack {
-            Text(label)
-                .foregroundStyle(.white.opacity(0.75))
+            Text(label).foregroundStyle(m3.onSurfaceVariant)
             Spacer()
             Text(value)
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .truncationMode(.middle)
+                .foregroundStyle(m3.onSurface)
+                .lineLimit(1).truncationMode(.middle)
                 .frame(maxWidth: 220, alignment: .trailing)
         }
         .font(.callout)
         .padding(.horizontal, 18)
         .padding(.vertical, 11)
+    }
+
+    private func m3Button(_ title: String, icon: String, bg: Color, fg: Color,
+                          action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                Text(title).fontWeight(.semibold)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+            .foregroundStyle(fg)
+            .background(bg, in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
