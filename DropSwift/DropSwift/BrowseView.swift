@@ -2,7 +2,8 @@
 //  BrowseView.swift
 //  DropSwift
 //
-//  Browse folders on the laptop and download files to the phone.
+//  Gallery view of the laptop's shared folder: photo/video thumbnails in a
+//  grid, tap to view photos or play videos in-app, folders to navigate.
 //
 
 import SwiftUI
@@ -14,7 +15,7 @@ struct BrowseView: View {
         NavigationStack {
             Group {
                 if server.isConnected {
-                    FolderListView(path: "", title: "Laptop")
+                    GalleryView(path: "", title: server.serverName.isEmpty ? "Laptop" : server.serverName)
                 } else {
                     ContentUnavailableView(
                         "Not connected",
@@ -23,13 +24,12 @@ struct BrowseView: View {
                     )
                 }
             }
-            .navigationTitle("Browse")
         }
     }
 }
 
-/// Lists a single folder; folders push a new FolderListView, files download.
-struct FolderListView: View {
+/// One folder shown as a gallery grid.
+struct GalleryView: View {
     @EnvironmentObject var server: ServerConnection
     let path: String
     let title: String
@@ -37,55 +37,76 @@ struct FolderListView: View {
     @State private var items: [RemoteFile] = []
     @State private var loading = false
     @State private var error: String?
+    @State private var selected: SelectedMedia?
 
-    // Download state
-    @State private var downloadedURL: URL?
+    // Download/share state (for non-media files).
+    @State private var shareURL: URL?
     @State private var showShare = false
-    @State private var downloadingName: String?
+
+    private let columns = [GridItem(.adaptive(minimum: 108), spacing: 6)]
+
+    private var folders: [RemoteFile] { items.filter { $0.isDir } }
+    private var files: [RemoteFile] { items.filter { !$0.isDir } }
 
     var body: some View {
-        List {
+        ScrollView {
             if let error {
-                Text(error).foregroundStyle(.orange)
+                Text(error).foregroundStyle(.orange).padding()
             }
-            ForEach(items) { item in
-                if item.isDir {
+            LazyVGrid(columns: columns, spacing: 6) {
+                ForEach(folders) { folder in
                     NavigationLink {
-                        FolderListView(path: childPath(item.name), title: item.name)
+                        GalleryView(path: childPath(folder.name), title: folder.name)
                     } label: {
-                        Label(item.name, systemImage: "folder.fill")
+                        FolderCell(name: folder.name)
                     }
-                } else {
-                    Button {
-                        Task { await download(item) }
-                    } label: {
-                        HStack {
-                            Label(item.name, systemImage: "doc")
-                                .foregroundStyle(.primary)
-                            Spacer()
-                            if downloadingName == item.name {
-                                ProgressView()
-                            } else {
-                                Text(item.displaySize)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
+                    .buttonStyle(.plain)
                 }
+                ForEach(files) { file in
+                    Button {
+                        tap(file)
+                    } label: {
+                        MediaCell(file: file, path: childPath(file.name))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(6)
+
+            if items.isEmpty && !loading {
+                ContentUnavailableView("Empty folder", systemImage: "tray")
+                    .padding(.top, 60)
             }
         }
         .overlay { if loading && items.isEmpty { ProgressView() } }
         .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
         .refreshable { await load() }
         .task { await load() }
+        .fullScreenCover(item: $selected) { media in
+            MediaViewer(media: media)
+        }
         .sheet(isPresented: $showShare) {
-            if let downloadedURL { ShareSheet(items: [downloadedURL]) }
+            if let shareURL { ShareSheet(items: [shareURL]) }
         }
     }
 
     private func childPath(_ name: String) -> String {
         path.isEmpty ? name : "\(path)/\(name)"
+    }
+
+    private func tap(_ file: RemoteFile) {
+        let p = childPath(file.name)
+        if MediaKind.of(file.name) == .other {
+            Task {
+                if let url = try? await server.download(path: p, name: file.name) {
+                    shareURL = url
+                    showShare = true
+                }
+            }
+        } else {
+            selected = SelectedMedia(path: p, name: file.name)
+        }
     }
 
     private func load() async {
@@ -96,17 +117,5 @@ struct FolderListView: View {
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
         loading = false
-    }
-
-    private func download(_ item: RemoteFile) async {
-        downloadingName = item.name
-        defer { downloadingName = nil }
-        do {
-            let url = try await server.download(path: childPath(item.name), name: item.name)
-            downloadedURL = url
-            showShare = true
-        } catch {
-            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        }
     }
 }

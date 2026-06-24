@@ -16,6 +16,7 @@ Phone and laptop must be on the same Wi-Fi / router.
 import argparse
 import atexit
 import json
+import mimetypes
 import os
 import shutil
 import socket
@@ -122,6 +123,7 @@ def safe_join(root: str, rel: str) -> str:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "DropSwift/1.0"
+    protocol_version = "HTTP/1.1"   # keep-alive + better range streaming
 
     # ---- helpers ---------------------------------------------------------
     def _send_json(self, obj, status=200):
@@ -194,20 +196,55 @@ class Handler(BaseHTTPRequestHandler):
         if not os.path.isfile(target):
             raise FileNotFoundError
         size = os.path.getsize(target)
-        self.send_response(200)
-        self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Content-Length", str(size))
-        self.send_header(
-            "Content-Disposition",
-            'attachment; filename="%s"' % os.path.basename(target),
-        )
-        self.end_headers()
-        with open(target, "rb") as f:
-            while True:
-                chunk = f.read(64 * 1024)
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
+        ctype = mimetypes.guess_type(target)[0] or "application/octet-stream"
+
+        # Honour HTTP Range requests so video can stream/seek and image
+        # thumbnails can be fetched without downloading the whole file.
+        range_header = self.headers.get("Range", "")
+        start, end = 0, size - 1
+        partial = False
+        if range_header.startswith("bytes="):
+            try:
+                spec = range_header.split("=", 1)[1].split(",")[0].strip()
+                s, _, e = spec.partition("-")
+                if s == "":
+                    start = max(0, size - int(e))
+                else:
+                    start = int(s)
+                    end = int(e) if e else size - 1
+                end = min(end, size - 1)
+                if start <= end:
+                    partial = True
+            except (ValueError, IndexError):
+                partial = False
+
+        length = end - start + 1
+        try:
+            if partial:
+                self.send_response(206)
+                self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
+            else:
+                self.send_response(200)
+                self.send_header(
+                    "Content-Disposition",
+                    'attachment; filename="%s"' % os.path.basename(target))
+            self.send_header("Content-Type", ctype)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(length))
+            self.end_headers()
+
+            with open(target, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(64 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            # The player/app closed the connection early; that's fine.
+            return
 
     def _upload(self, rel):
         # The app sends the raw file bytes as the body and the desired

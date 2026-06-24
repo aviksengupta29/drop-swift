@@ -110,6 +110,18 @@ final class ServerConnection: ObservableObject {
         return try JSONDecoder().decode(Listing.self, from: data)
     }
 
+    /// Direct URL used to stream a video or load an image (AVPlayer / ImageIO).
+    func fileURL(path: String) -> URL? {
+        try? url("/api/download", query: ["path": path])
+    }
+
+    /// Raw bytes of a file (used to build image thumbnails / full images).
+    func fileData(path: String) async throws -> Data {
+        let (data, response) = try await session.data(from: try url("/api/download", query: ["path": path]))
+        try Self.check(response)
+        return data
+    }
+
     /// Downloads a file to a temporary location and returns its local URL.
     func download(path: String, name: String) async throws -> URL {
         let (data, response) = try await session.data(from: try url("/api/download", query: ["path": path]))
