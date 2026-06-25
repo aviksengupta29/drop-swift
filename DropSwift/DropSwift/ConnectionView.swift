@@ -10,7 +10,6 @@ import SwiftUI
 struct ConnectionView: View {
     @EnvironmentObject var server: ServerConnection
     @StateObject private var discovery = Discovery()
-    @State private var connecting = false
     @State private var showManual = false
 
     var body: some View {
@@ -45,7 +44,7 @@ struct ConnectionView: View {
                     }
                 } else {
                     ForEach(discovery.servers) { found in
-                        Button { Task { await connect(to: found) } } label: {
+                        Button { Task { await server.connect(to: found) } } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: "laptopcomputer")
                                     .font(.title3)
@@ -84,7 +83,7 @@ struct ConnectionView: View {
                     Circle().fill(statusColor).frame(width: 9, height: 9)
                     Text(statusText)
                     Spacer()
-                    if connecting { ProgressView() }
+                    if server.isConnecting { ProgressView() }
                 }
                 if server.isConnected {
                     Button(role: .destructive) {
@@ -108,9 +107,9 @@ struct ConnectionView: View {
                     TextField("Port (e.g. 8080)", text: $server.port)
                         .keyboardType(.numberPad)
                     Button("Connect") {
-                        Task { connecting = true; await server.connect(); connecting = false }
+                        Task { await server.connectManually() }
                     }
-                    .disabled(connecting)
+                    .disabled(server.isConnecting)
                 }
             } footer: {
                 Text("Make sure the DropSwift server is running and both devices are on the same Wi‑Fi.")
@@ -120,11 +119,14 @@ struct ConnectionView: View {
         .tint(Theme.accent)
         .onAppear { discovery.start() }
         .onDisappear { discovery.stop() }
+        .onChange(of: discovery.servers) { _, servers in
+            Task { await server.autoConnectIfKnown(servers) }
+        }
     }
 
     private var statusText: String {
         if server.isConnected { return "Connected to \(server.serverName)" }
-        if connecting { return "Connecting…" }
+        if server.isConnecting { return "Connecting…" }
         if let err = server.lastError { return err }
         return "Not connected"
     }
@@ -133,14 +135,6 @@ struct ConnectionView: View {
         if server.isConnected { return .green }
         if server.lastError != nil { return .red }
         return .secondary
-    }
-
-    private func connect(to found: DiscoveredServer) async {
-        connecting = true
-        server.host = found.host
-        server.port = String(found.port)
-        await server.connect()
-        connecting = false
     }
 }
 

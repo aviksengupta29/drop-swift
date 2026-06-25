@@ -54,14 +54,23 @@ final class ServerConnection: ObservableObject {
     /// code-entry sheet.
     @Published var needsCode = false
 
+    /// True while a connect/auto-connect is in flight.
+    @Published var isConnecting = false
+
     private var heartbeat: Task<Void, Never>?
     private var token: String?
+    private var currentKey = ""              // stable per-computer key for stored creds
+    private var isAutoConnecting = false
+    private var suppressAutoConnect = false  // set after a manual disconnect
 
-    private func tokenKey() -> String {
-        "dropswift.token.\(host.trimmingCharacters(in: .whitespaces)):\(port)"
-    }
+    // Credentials are stored per computer (keyed by its stable Bonjour name when
+    // discovered, or host:port for manual entry) so they survive IP changes.
+    private func tokenKey() -> String { "dropswift.token.\(currentKey)" }
+    private func codeKey() -> String { "dropswift.code.\(currentKey)" }
     private func loadToken() -> String? { UserDefaults.standard.string(forKey: tokenKey()) }
     private func saveToken(_ t: String) { UserDefaults.standard.set(t, forKey: tokenKey()) }
+    private func loadCode() -> String? { UserDefaults.standard.string(forKey: codeKey()) }
+    private func saveCode(_ c: String) { UserDefaults.standard.set(c, forKey: codeKey()) }
     private func clearToken() {
         token = nil
         UserDefaults.standard.removeObject(forKey: tokenKey())
@@ -142,12 +151,31 @@ final class ServerConnection: ObservableObject {
 
     // MARK: - Endpoints
 
-    /// Checks the server is reachable, then either reuses a saved token or asks
-    /// for the 6-digit access code.
+    /// Connect to a discovered computer (remembers it by its stable name).
+    func connect(to found: DiscoveredServer) async {
+        suppressAutoConnect = false
+        currentKey = found.id
+        host = found.host
+        port = String(found.port)
+        await connect()
+    }
+
+    /// Connect using the manually-entered host/port.
+    func connectManually() async {
+        suppressAutoConnect = false
+        currentKey = "host:\(host.trimmingCharacters(in: .whitespaces)):\(port)"
+        await connect()
+    }
+
+    /// Checks the server is reachable, then either reuses a saved token, silently
+    /// re-authenticates with the saved code, or asks for the code (first time).
     func connect() async {
+        if currentKey.isEmpty { currentKey = "host:\(host):\(port)" }
         lastError = nil
         didDisconnectUnexpectedly = false
         needsCode = false
+        isConnecting = true
+        defer { isConnecting = false }
         token = loadToken()
         do {
             let (data, response) = try await session.data(from: try url("/api/health"))
@@ -156,14 +184,15 @@ final class ServerConnection: ObservableObject {
             serverName = health.name
 
             if token != nil, await verifyToken() {
-                isConnected = true
-                startHeartbeat()
-            } else {
-                // Reachable, but we need the access code.
-                clearToken()
-                isConnected = false
-                needsCode = true
+                isConnected = true; startHeartbeat(); return
             }
+            // Token missing/expired: try the saved code silently, else prompt.
+            if let code = loadCode(), await authenticate(code: code) {
+                isConnected = true; startHeartbeat(); return
+            }
+            clearToken()
+            isConnected = false
+            needsCode = true
         } catch {
             isConnected = false
             serverName = ""
@@ -171,36 +200,64 @@ final class ServerConnection: ObservableObject {
         }
     }
 
-    /// Exchanges the 6-digit code for a session token.
+    /// Auto-connect to the first discovered computer we already have a code for —
+    /// no tap, no code prompt.
+    func autoConnectIfKnown(_ servers: [DiscoveredServer]) async {
+        guard !isConnected, !isConnecting, !isAutoConnecting,
+              !suppressAutoConnect, !needsCode else { return }
+        isAutoConnecting = true
+        defer { isAutoConnecting = false }
+
+        for found in servers {
+            guard UserDefaults.standard.string(forKey: "dropswift.code.\(found.id)") != nil else { continue }
+            currentKey = found.id
+            host = found.host
+            port = String(found.port)
+            isConnecting = true
+            await connect()
+            isConnecting = false
+            if isConnected { return }
+        }
+    }
+
+    /// Exchanges the 6-digit code for a session token (called from the code sheet).
     func submitCode(_ code: String) async {
         lastError = nil
+        if await authenticate(code: code) {
+            needsCode = false
+            isConnected = true
+            startHeartbeat()
+        } else {
+            lastError = "Invalid code. Please try again."
+        }
+    }
+
+    /// POSTs the code, stores the token AND the code (for future auto-connect).
+    @discardableResult
+    private func authenticate(code: String) async -> Bool {
         do {
             var request = URLRequest(url: try url("/api/auth"))
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: ["code": code])
-
             let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                lastError = "Invalid code. Please try again."
-                return
-            }
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return false }
             let result = try JSONDecoder().decode(AuthResult.self, from: data)
             token = result.token
             saveToken(result.token)
+            saveCode(code)
             if let name = result.name, !name.isEmpty { serverName = name }
-            needsCode = false
-            isConnected = true
-            startHeartbeat()
+            return true
         } catch {
-            lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return false
         }
     }
 
-    /// Drops the current connection (the computer stays discoverable). Keeps the
-    /// saved token so reconnecting doesn't re-prompt for the code.
+    /// Drops the current connection and suppresses auto-connect for this session.
+    /// Keeps the saved code so reconnecting doesn't re-prompt.
     func disconnect() {
         stopHeartbeat()
+        suppressAutoConnect = true
         isConnected = false
         serverName = ""
         lastError = nil
@@ -242,12 +299,17 @@ final class ServerConnection: ObservableObject {
                 case .ok:
                     failures = 0
                 case .unauthorized:
-                    // Token expired (server restarted) — ask for the code again.
-                    self.clearToken()
-                    self.stopHeartbeat()
-                    self.isConnected = false
-                    self.needsCode = true
-                    return
+                    // Token expired (server restarted). Silently re-authenticate
+                    // with the saved code; only prompt if that also fails.
+                    if let code = self.loadCode(), await self.authenticate(code: code) {
+                        failures = 0
+                    } else {
+                        self.clearToken()
+                        self.stopHeartbeat()
+                        self.isConnected = false
+                        self.needsCode = true
+                        return
+                    }
                 case .fail:
                     failures += 1
                     // Be tolerant: only declare a drop after several misses.
