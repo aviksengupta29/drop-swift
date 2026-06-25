@@ -38,8 +38,8 @@ struct UploadView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            .frame(maxWidth: .infinity)
             .padding(20)
+            .frame(maxWidth: .infinity)
             .glass(RoundedRectangle(cornerRadius: 26, style: .continuous))
 
             PhotosPicker(
@@ -108,6 +108,7 @@ struct UploadView: View {
             .controlSize(.large)
         }
         .padding(20)
+        .frame(maxWidth: .infinity)
         .glass(RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 

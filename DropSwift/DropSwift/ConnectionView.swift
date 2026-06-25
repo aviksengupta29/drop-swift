@@ -15,11 +15,10 @@ struct ConnectionView: View {
 
     var body: some View {
         GlassScreen {
-            VStack(spacing: 18) {
+            VStack(spacing: 16) {
                 hero
                 discovered
-                statusPill
-                if server.isConnected { disconnectButton }
+                statusRow
                 manual
                 Text("Make sure the DropSwift server is running and both devices are on the same Wi‑Fi.")
                     .font(.footnote)
@@ -28,6 +27,7 @@ struct ConnectionView: View {
                     .padding(.horizontal, 8)
                     .padding(.top, 2)
             }
+            .frame(maxWidth: .infinity)
         }
         .onAppear { discovery.start() }
         .onDisappear { discovery.stop() }
@@ -87,12 +87,14 @@ struct ConnectionView: View {
                         Button { Task { await connect(to: found) } } label: {
                             HStack(spacing: 14) {
                                 Image(systemName: "laptopcomputer")
-                                    .font(.title3).foregroundStyle(Theme.accent).frame(width: 38)
+                                    .font(.title3).foregroundStyle(Theme.accent).frame(width: 34)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(found.name).foregroundStyle(.primary)
-                                    Text("\(found.host):\(found.port)").font(.caption).foregroundStyle(.secondary)
+                                        .lineLimit(1).truncationMode(.tail)
+                                    Text(verbatim: "\(found.host):\(found.port)")
+                                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 }
-                                Spacer()
+                                Spacer(minLength: 8)
                                 if server.isConnected && server.host == found.host {
                                     Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.green)
                                 }
@@ -105,35 +107,52 @@ struct ConnectionView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity)
             .glass(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
     }
 
     // MARK: Status + disconnect
 
-    private var statusPill: some View {
-        HStack(spacing: 8) {
-            if connecting {
-                ProgressView().controlSize(.small)
+    // Connected + Disconnect side by side (equal size); status alone otherwise.
+    private var statusRow: some View {
+        Group {
+            if server.isConnected {
+                HStack(spacing: 12) {
+                    chip(dot: Theme.green, text: "Connected", textColor: .primary,
+                         border: Theme.green.opacity(0.5))
+                    Button { withAnimation { server.disconnect() } } label: {
+                        chip(icon: "wifi.slash", text: "Disconnect", textColor: Theme.red,
+                             border: Theme.red.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                }
             } else {
-                Circle().fill(statusColor).frame(width: 8, height: 8)
+                HStack(spacing: 8) {
+                    if connecting { ProgressView().controlSize(.small) }
+                    else { Circle().fill(statusColor).frame(width: 8, height: 8) }
+                    Text(statusText).font(.subheadline.weight(.medium))
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .glass(Capsule())
             }
-            Text(statusText).font(.subheadline.weight(.medium))
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .glass(Capsule())
-        .overlay(Capsule().strokeBorder(server.isConnected ? Theme.green.opacity(0.55) : .clear, lineWidth: 1))
-        .shadow(color: server.isConnected ? Theme.green.opacity(0.4) : .clear, radius: server.isConnected ? 9 : 0)
     }
 
-    private var disconnectButton: some View {
-        Button(role: .destructive) { withAnimation { server.disconnect() } } label: {
-            Label("Disconnect", systemImage: "wifi.slash")
+    /// One half of the connected/disconnect pair — fixed equal size.
+    private func chip(dot: Color? = nil, icon: String? = nil, text: String,
+                      textColor: Color, border: Color) -> some View {
+        HStack(spacing: 8) {
+            if let dot { Circle().fill(dot).frame(width: 8, height: 8) }
+            if let icon { Image(systemName: icon) }
+            Text(text).font(.subheadline.weight(.semibold))
         }
-        .buttonStyle(.glass)
-        .controlSize(.large)
-        .tint(Theme.red)
+        .foregroundStyle(textColor)
+        .frame(maxWidth: .infinity)
+        .frame(height: 50)
+        .glass(Capsule())
+        .overlay(Capsule().strokeBorder(border, lineWidth: 1))
     }
 
     // MARK: Manual entry
@@ -162,6 +181,7 @@ struct ConnectionView: View {
                     .disabled(connecting)
                 }
                 .padding(16)
+                .frame(maxWidth: .infinity)
                 .glass(RoundedRectangle(cornerRadius: 22, style: .continuous))
             }
         }
@@ -173,6 +193,7 @@ struct ConnectionView: View {
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
             .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity)
             .frame(height: 50)
             .glass(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
