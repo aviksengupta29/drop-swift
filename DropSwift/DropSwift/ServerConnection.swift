@@ -12,6 +12,7 @@ import UIKit
 import PhotosUI
 import Photos
 import AVFoundation
+import ActivityKit
 
 /// Errors surfaced to the UI.
 enum ServerError: LocalizedError {
@@ -415,6 +416,41 @@ final class ServerConnection: ObservableObject {
         }
     }
 
+    // MARK: - Live Activity (Dynamic Island)
+
+    private var liveActivity: Activity<TransferActivityAttributes>?
+
+    private func startLiveActivity(total: Int) {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        let attributes = TransferActivityAttributes(serverName: serverName)
+        let state = TransferActivityAttributes.ContentState(
+            completed: 0, total: total, fraction: 0, currentName: "", done: false)
+        liveActivity = try? Activity.request(
+            attributes: attributes,
+            content: ActivityContent(state: state, staleDate: nil))
+    }
+
+    private func updateLiveActivity() {
+        guard let liveActivity else { return }
+        let state = TransferActivityAttributes.ContentState(
+            completed: transferCompleted, total: transferTotal,
+            fraction: transferOverall, currentName: transferCurrentName, done: false)
+        Task { await liveActivity.update(ActivityContent(state: state, staleDate: nil)) }
+    }
+
+    private func endLiveActivity() {
+        guard let liveActivity else { return }
+        let state = TransferActivityAttributes.ContentState(
+            completed: transferCompleted, total: transferTotal,
+            fraction: 1, currentName: "", done: true)
+        let finished = liveActivity
+        self.liveActivity = nil
+        Task {
+            await finished.end(ActivityContent(state: state, staleDate: nil),
+                               dismissalPolicy: .after(Date().addingTimeInterval(4)))
+        }
+    }
+
     /// Sends an UNLIMITED number of photos/videos to the laptop, STREAMING each
     /// from disk (constant low memory — handles 1 TB+), keeping the original
     /// filename + metadata. Uploads several in parallel as a queue that refills,
@@ -434,9 +470,21 @@ final class ServerConnection: ObservableObject {
         bgTask = UIApplication.shared.beginBackgroundTask(withName: "DropSwiftTransfer") { [weak self] in
             Task { @MainActor in self?.endBackgroundTask() }
         }
+
+        // Dynamic Island / Lock Screen Live Activity (AirDrop-style progress).
+        startLiveActivity(total: items.count)
+        let liveUpdater = Task { @MainActor [weak self] in
+            while self?.isTransferring == true {
+                self?.updateLiveActivity()
+                try? await Task.sleep(for: .seconds(1.5))
+            }
+        }
+
         defer {
             UIApplication.shared.isIdleTimerDisabled = false
             endBackgroundTask()
+            liveUpdater.cancel()
+            endLiveActivity()
         }
 
         // Needed to read the original file + filename from the photo library.
