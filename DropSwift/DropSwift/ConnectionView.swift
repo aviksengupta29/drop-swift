@@ -112,34 +112,28 @@ struct ConnectionView: View {
     // MARK: Status + disconnect
 
     private var statusPill: some View {
-        GlowPill(tint: server.isConnected ? Theme.green : nil,
-                 glow: server.isConnected, pulse: server.isConnected) {
-            HStack(spacing: 9) {
-                if connecting {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Circle()
-                        .fill(server.isConnected ? Theme.green : (server.lastError != nil ? Theme.red : Color.secondary))
-                        .frame(width: 9, height: 9)
-                }
-                Text(statusText).font(.system(size: 15, weight: .semibold))
+        HStack(spacing: 8) {
+            if connecting {
+                ProgressView().controlSize(.small)
+            } else {
+                Circle().fill(statusColor).frame(width: 8, height: 8)
             }
-            .padding(.horizontal, 16)
+            Text(statusText).font(.subheadline.weight(.medium))
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .glass(Capsule())
+        .overlay(Capsule().strokeBorder(server.isConnected ? Theme.green.opacity(0.55) : .clear, lineWidth: 1))
+        .shadow(color: server.isConnected ? Theme.green.opacity(0.4) : .clear, radius: server.isConnected ? 9 : 0)
     }
 
     private var disconnectButton: some View {
-        Button { withAnimation { server.disconnect() } } label: {
-            GlowPill(tint: Theme.red) {
-                HStack(spacing: 8) {
-                    Image(systemName: "wifi.slash")
-                    Text("Disconnect").font(.system(size: 15, weight: .semibold))
-                }
-                .foregroundStyle(Theme.red)
-                .padding(.horizontal, 16)
-            }
+        Button(role: .destructive) { withAnimation { server.disconnect() } } label: {
+            Label("Disconnect", systemImage: "wifi.slash")
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.glass)
+        .controlSize(.large)
+        .tint(Theme.red)
     }
 
     // MARK: Manual entry
@@ -148,10 +142,9 @@ struct ConnectionView: View {
         VStack(spacing: 12) {
             Button { withAnimation { showManual.toggle() } } label: {
                 Label(showManual ? "Hide manual entry" : "Enter address manually", systemImage: "keyboard")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
             }
             .buttonStyle(.glass)
+            .controlSize(.large)
             .tint(Theme.accent)
 
             if showManual {
@@ -161,9 +154,10 @@ struct ConnectionView: View {
                     Button {
                         Task { connecting = true; await server.connect(); connecting = false }
                     } label: {
-                        Text("Connect").frame(maxWidth: .infinity).padding(.vertical, 6)
+                        Text("Connect")
                     }
                     .buttonStyle(.glassProminent)
+                    .controlSize(.large)
                     .tint(Theme.accent)
                     .disabled(connecting)
                 }
@@ -186,10 +180,16 @@ struct ConnectionView: View {
     // MARK: Helpers
 
     private var statusText: String {
-        if server.isConnected { return "Connected to \(server.serverName)" }
+        if server.isConnected { return "Connected" }
         if connecting { return "Connecting…" }
         if let err = server.lastError { return err }
         return "Not connected"
+    }
+
+    private var statusColor: Color {
+        if server.isConnected { return Theme.green }
+        if server.lastError != nil { return Theme.red }
+        return .secondary
     }
 
     private func connect(to found: DiscoveredServer) async {
@@ -248,12 +248,11 @@ struct CodeEntryView: View {
                     }
                 } label: {
                     Text(submitting ? "Checking…" : "Connect")
-                        .frame(maxWidth: .infinity).padding(.vertical, 6)
                 }
                 .buttonStyle(.glassProminent)
+                .controlSize(.large)
                 .tint(Theme.accent)
                 .disabled(code.count != 6 || submitting)
-                .padding(.horizontal, 24)
 
                 Button("Cancel") { dismiss() }
                     .foregroundStyle(.secondary)

@@ -49,10 +49,9 @@ struct UploadView: View {
                 photoLibrary: .shared()
             ) {
                 Label("Choose photos / videos", systemImage: "photo.on.rectangle.angled")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
             }
             .buttonStyle(.glass)
+            .controlSize(.large)
             .tint(Theme.accent)
             .disabled(server.isTransferring)
 
@@ -70,10 +69,9 @@ struct UploadView: View {
                     }
                 } label: {
                     Label("Send \(selection.count) item(s)", systemImage: "paperplane.fill")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
                 }
                 .buttonStyle(.glassProminent)
+                .controlSize(.large)
                 .tint(Theme.accent)
             }
 
@@ -104,9 +102,10 @@ struct UploadView: View {
                 .lineLimit(1).truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button(role: .destructive) { sendTask?.cancel() } label: {
-                Label("Cancel", systemImage: "xmark").frame(maxWidth: .infinity)
+                Label("Cancel", systemImage: "xmark")
             }
             .buttonStyle(.glass)
+            .controlSize(.large)
         }
         .padding(20)
         .glass(RoundedRectangle(cornerRadius: 26, style: .continuous))
