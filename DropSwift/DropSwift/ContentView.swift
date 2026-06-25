@@ -31,6 +31,9 @@ struct ContentView: View {
         } message: {
             Text("Lost connection to your computer. Make sure the DropSwift server is running and both devices are on the same Wi-Fi.")
         }
+        .sheet(isPresented: $server.needsCode) {
+            CodeEntryView().environmentObject(server)
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task { await server.checkNow() }

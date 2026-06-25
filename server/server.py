@@ -18,10 +18,13 @@ import atexit
 import json
 import mimetypes
 import os
+import secrets
 import shutil
 import socket
 import subprocess
 import sys
+import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -30,6 +33,16 @@ SHARE_ROOT = None
 
 # Bonjour service type the iPhone app browses for.
 SERVICE_TYPE = "_dropswift._tcp"
+
+# 6-digit access code clients must enter, and the set of session tokens issued
+# after a correct code. Tokens reset when the server restarts.
+ACCESS_CODE = None
+TOKENS = set()
+TOKENS_LOCK = threading.Lock()
+
+
+def new_code() -> str:
+    return "".join(secrets.choice("0123456789") for _ in range(6))
 
 
 def _instance_name() -> str:
@@ -143,15 +156,34 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("  %s - %s\n" % (self.address_string(), fmt % args))
 
+    def _authed(self) -> bool:
+        token = self.headers.get("X-Auth-Token", "")
+        if not token:
+            return False
+        with TOKENS_LOCK:
+            return token in TOKENS
+
+    def _unauthorized(self):
+        self._send_json({"error": "unauthorized"}, 401)
+
     # ---- routing ---------------------------------------------------------
     def do_GET(self):
         path, q = self._query()
         try:
+            # Health is open (discovery); everything else needs a valid token.
             if path == "/" or path == "/api/health":
-                self._send_json({"status": "ok", "name": socket.gethostname()})
+                self._send_json({"status": "ok", "name": socket.gethostname(), "auth": True})
+            elif path == "/api/ping":
+                if not self._authed():
+                    return self._unauthorized()
+                self._send_json({"ok": True})
             elif path == "/api/list":
+                if not self._authed():
+                    return self._unauthorized()
                 self._list(q.get("path", ""))
             elif path == "/api/download":
+                if not self._authed():
+                    return self._unauthorized()
                 self._download(q.get("path", ""))
             else:
                 self._send_json({"error": "not found"}, 404)
@@ -165,7 +197,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path, q = self._query()
         try:
-            if path == "/api/upload":
+            if path == "/api/auth":
+                self._auth()
+            elif path == "/api/upload":
+                if not self._authed():
+                    return self._unauthorized()
                 self._upload(q.get("path", ""))
             else:
                 self._send_json({"error": "not found"}, 404)
@@ -173,6 +209,22 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": str(e)}, 403)
         except Exception as e:  # pragma: no cover - defensive
             self._send_json({"error": str(e)}, 500)
+
+    def _auth(self):
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length > 0 else b""
+        try:
+            code = str(json.loads(raw.decode("utf-8")).get("code", ""))
+        except Exception:
+            code = ""
+        if code and ACCESS_CODE and secrets.compare_digest(code, ACCESS_CODE):
+            token = secrets.token_urlsafe(24)
+            with TOKENS_LOCK:
+                TOKENS.add(token)
+            self._send_json({"ok": True, "token": token, "name": socket.gethostname()})
+        else:
+            time.sleep(1.0)   # slow down brute-force guessing
+            self._send_json({"ok": False, "error": "invalid code"}, 401)
 
     # ---- endpoints -------------------------------------------------------
     def _list(self, rel):
@@ -303,15 +355,18 @@ def default_share_dir() -> str:
 
 
 def main():
-    global SHARE_ROOT
+    global SHARE_ROOT, ACCESS_CODE
     parser = argparse.ArgumentParser(description="DropSwift laptop server")
     parser.add_argument("--dir", default=default_share_dir(),
                         help="folder to share (default: ./shared, or Desktop/DropSwift for the app)")
     parser.add_argument("--port", type=int, default=8080, help="port (default: 8080)")
+    parser.add_argument("--code", default=None,
+                        help="6-digit access code (random if omitted)")
     args = parser.parse_args()
 
     SHARE_ROOT = os.path.realpath(os.path.expanduser(args.dir))
     os.makedirs(SHARE_ROOT, exist_ok=True)
+    ACCESS_CODE = args.code or new_code()
 
     ip = lan_ip()
     server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
@@ -322,6 +377,7 @@ def main():
     print(" DropSwift server is running")
     print(" Sharing folder : %s" % SHARE_ROOT)
     print(" On this device : http://%s:%d" % (ip, args.port))
+    print(" ACCESS CODE    : %s   (enter this in the app to connect)" % ACCESS_CODE)
     if method is not None:
         print(" Auto-discovery : ON via %s (the app finds this computer" % method)
         print("                  by itself — no IP/port typing needed)")

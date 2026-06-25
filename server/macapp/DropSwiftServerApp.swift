@@ -48,6 +48,7 @@ final class ServerController: ObservableObject {
     @Published var ip = "—"
     @Published var port = 8080
     @Published var folder: URL
+    @Published var code: String
 
     private var process: Process?
 
@@ -56,8 +57,27 @@ final class ServerController: ObservableObject {
         let def = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Desktop/DropSwift")
         self.folder = saved ?? def
+
+        // A stable 6-digit access code, generated once and remembered.
+        if let savedCode = UserDefaults.standard.string(forKey: "dropswift.code"),
+           savedCode.count == 6 {
+            self.code = savedCode
+        } else {
+            let c = String(format: "%06d", Int.random(in: 0...999_999))
+            UserDefaults.standard.set(c, forKey: "dropswift.code")
+            self.code = c
+        }
+
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         self.ip = Self.localIPv4()
+    }
+
+    /// Generates a new access code (invalidates the old one on next start).
+    func regenerateCode() {
+        let c = String(format: "%06d", Int.random(in: 0...999_999))
+        UserDefaults.standard.set(c, forKey: "dropswift.code")
+        code = c
+        if isRunning { start() }   // restart so the server uses the new code
     }
 
     func start() {
@@ -71,7 +91,7 @@ final class ServerController: ObservableObject {
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: py)
-        task.arguments = [script.path, "--dir", folder.path, "--port", String(port)]
+        task.arguments = [script.path, "--dir", folder.path, "--port", String(port), "--code", code]
         task.standardOutput = nil
         task.standardError = nil
         do {
@@ -206,6 +226,25 @@ struct ServerView: View {
 
     private func infoCard(_ m3: M3) -> some View {
         VStack(spacing: 0) {
+            // Access code — emphasized.
+            HStack {
+                Text("Access code").foregroundStyle(m3.onSurfaceVariant)
+                Spacer()
+                Text(server.code)
+                    .font(.system(size: 22, weight: .bold, design: .monospaced))
+                    .tracking(3)
+                    .foregroundStyle(m3.primary)
+                Button { server.regenerateCode() } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(m3.onSurfaceVariant)
+                .help("Generate a new code")
+            }
+            .font(.callout)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 11)
+            Divider().overlay(m3.outlineVariant)
             row(m3, "IP Address", server.ip)
             Divider().overlay(m3.outlineVariant)
             row(m3, "Port", String(server.port))

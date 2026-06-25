@@ -215,6 +215,69 @@ struct GlowingPill<Content: View>: View {
     }
 }
 
+/// Sheet that asks for the server's 6-digit access code.
+struct CodeEntryView: View {
+    @Environment(\.colorScheme) private var scheme
+    @EnvironmentObject var server: ServerConnection
+    @Environment(\.dismiss) private var dismiss
+    @State private var code = ""
+    @State private var submitting = false
+
+    var body: some View {
+        let m3 = M3(scheme)
+        VStack(spacing: 16) {
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(m3.primary)
+                .padding(.top, 28)
+            Text("Enter access code")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(m3.onSurface)
+            Text("Type the 6-digit code shown in the DropSwift app on \(server.serverName.isEmpty ? "your computer" : server.serverName).")
+                .font(.system(size: 14))
+                .foregroundStyle(m3.onSurfaceVariant)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+
+            TextField("000000", text: $code)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.center)
+                .font(.system(size: 34, weight: .bold, design: .monospaced))
+                .tracking(8)
+                .frame(height: 62)
+                .frame(maxWidth: .infinity)
+                .background(RoundedRectangle(cornerRadius: 14).fill(m3.surfaceContainerHigh))
+                .padding(.horizontal, 40)
+                .onChange(of: code) { _, v in code = String(v.filter(\.isNumber).prefix(6)) }
+
+            if let err = server.lastError {
+                Text(err).font(.footnote).foregroundStyle(m3.error)
+            }
+
+            M3FilledButton(title: submitting ? "Checking…" : "Connect",
+                           icon: "checkmark.circle",
+                           enabled: code.count == 6 && !submitting) {
+                Task {
+                    submitting = true
+                    await server.submitCode(code)
+                    submitting = false
+                    if server.isConnected { dismiss() }
+                }
+            }
+            .padding(.horizontal, 24)
+
+            Button("Cancel") { dismiss() }
+                .foregroundStyle(m3.onSurfaceVariant)
+                .padding(.bottom, 8)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .background(m3.surface.ignoresSafeArea())
+        .presentationDetents([.medium])
+    }
+}
+
 /// Material 3 outlined text field.
 struct M3TextField: View {
     @Environment(\.colorScheme) private var scheme

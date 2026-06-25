@@ -48,8 +48,7 @@ func makeThumbnail(from data: Data, maxPixel: CGFloat) -> UIImage? {
 }
 
 /// Grabs the first frame of a video for use as a thumbnail.
-func makeVideoThumbnail(url: URL) async -> UIImage? {
-    let asset = AVURLAsset(url: url)
+func makeVideoThumbnail(asset: AVURLAsset) async -> UIImage? {
     let generator = AVAssetImageGenerator(asset: asset)
     generator.appliesPreferredTrackTransform = true
     generator.maximumSize = CGSize(width: 600, height: 600)
@@ -119,8 +118,8 @@ struct MediaCell: View {
             ThumbnailCache.shared.set(thumb, for: path)
             image = thumb
         case .video:
-            guard let url = server.fileURL(path: path),
-                  let thumb = await makeVideoThumbnail(url: url) else { return }
+            guard let asset = server.videoAsset(path: path),
+                  let thumb = await makeVideoThumbnail(asset: asset) else { return }
             ThumbnailCache.shared.set(thumb, for: path)
             image = thumb
         case .other:
@@ -232,8 +231,8 @@ struct MediaPage: View {
     var body: some View {
         switch MediaKind.of(media.name) {
         case .video:
-            if let url = server.fileURL(path: media.path) {
-                VideoPlayerView(url: url)
+            if let asset = server.videoAsset(path: media.path) {
+                VideoPlayerView(asset: asset)
             } else {
                 Color.black
             }
@@ -253,8 +252,8 @@ final class VideoModel: ObservableObject {
     var scrubbing = false
     private var token: Any?
 
-    func load(_ url: URL) {
-        player.replaceCurrentItem(with: AVPlayerItem(url: url))
+    func load(_ asset: AVURLAsset) {
+        player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
         token = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.3, preferredTimescale: 600), queue: .main
         ) { [weak self] time in
@@ -301,7 +300,7 @@ struct VideoSurface: UIViewControllerRepresentable {
 }
 
 struct VideoPlayerView: View {
-    let url: URL
+    let asset: AVURLAsset
     @StateObject private var model = VideoModel()
     @State private var showControls = true
 
@@ -342,7 +341,7 @@ struct VideoPlayerView: View {
                 }
             }
         }
-        .onAppear { model.load(url) }
+        .onAppear { model.load(asset) }
         .onDisappear { model.teardown() }
     }
 

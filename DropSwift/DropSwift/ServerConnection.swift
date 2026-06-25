@@ -10,12 +10,14 @@ import Combine
 import SwiftUI
 import PhotosUI
 import Photos
+import AVFoundation
 
 /// Errors surfaced to the UI.
 enum ServerError: LocalizedError {
     case notConnected
     case badAddress
     case http(Int)
+    case unauthorized
     case message(String)
 
     var errorDescription: String? {
@@ -23,9 +25,16 @@ enum ServerError: LocalizedError {
         case .notConnected: return "Not connected to a computer yet."
         case .badAddress:   return "Enter a valid host and port."
         case .http(let c):  return "Server returned HTTP \(c)."
+        case .unauthorized: return "The access code is no longer valid."
         case .message(let m): return m
         }
     }
+}
+
+/// Response from /api/auth.
+private struct AuthResult: Codable {
+    let token: String
+    let name: String?
 }
 
 /// Holds the connection details and performs all network calls.
@@ -41,7 +50,29 @@ final class ServerConnection: ObservableObject {
     /// "disconnected" popup.
     @Published var didDisconnectUnexpectedly = false
 
+    /// Set true when the server needs the 6-digit access code — drives the
+    /// code-entry sheet.
+    @Published var needsCode = false
+
     private var heartbeat: Task<Void, Never>?
+    private var token: String?
+
+    private func tokenKey() -> String {
+        "dropswift.token.\(host.trimmingCharacters(in: .whitespaces)):\(port)"
+    }
+    private func loadToken() -> String? { UserDefaults.standard.string(forKey: tokenKey()) }
+    private func saveToken(_ t: String) { UserDefaults.standard.set(t, forKey: tokenKey()) }
+    private func clearToken() {
+        token = nil
+        UserDefaults.standard.removeObject(forKey: tokenKey())
+    }
+
+    /// Builds a request carrying the auth token (when we have one).
+    private func authed(_ path: String, query: [String: String] = [:]) throws -> URLRequest {
+        var request = URLRequest(url: try url(path, query: query))
+        if let token { request.setValue(token, forHTTPHeaderField: "X-Auth-Token") }
+        return request
+    }
 
     // Transfer progress (observed by the UI for the progress bar).
     @Published var isTransferring = false
@@ -111,17 +142,28 @@ final class ServerConnection: ObservableObject {
 
     // MARK: - Endpoints
 
-    /// Pings the server and records whether we're connected.
+    /// Checks the server is reachable, then either reuses a saved token or asks
+    /// for the 6-digit access code.
     func connect() async {
         lastError = nil
         didDisconnectUnexpectedly = false
+        needsCode = false
+        token = loadToken()
         do {
             let (data, response) = try await session.data(from: try url("/api/health"))
             try Self.check(response)
             let health = try JSONDecoder().decode(Health.self, from: data)
             serverName = health.name
-            isConnected = true
-            startHeartbeat()
+
+            if token != nil, await verifyToken() {
+                isConnected = true
+                startHeartbeat()
+            } else {
+                // Reachable, but we need the access code.
+                clearToken()
+                isConnected = false
+                needsCode = true
+            }
         } catch {
             isConnected = false
             serverName = ""
@@ -129,12 +171,50 @@ final class ServerConnection: ObservableObject {
         }
     }
 
-    /// Drops the current connection (the computer stays discoverable).
+    /// Exchanges the 6-digit code for a session token.
+    func submitCode(_ code: String) async {
+        lastError = nil
+        do {
+            var request = URLRequest(url: try url("/api/auth"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["code": code])
+
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                lastError = "Invalid code. Please try again."
+                return
+            }
+            let result = try JSONDecoder().decode(AuthResult.self, from: data)
+            token = result.token
+            saveToken(result.token)
+            if let name = result.name, !name.isEmpty { serverName = name }
+            needsCode = false
+            isConnected = true
+            startHeartbeat()
+        } catch {
+            lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Drops the current connection (the computer stays discoverable). Keeps the
+    /// saved token so reconnecting doesn't re-prompt for the code.
     func disconnect() {
         stopHeartbeat()
         isConnected = false
         serverName = ""
         lastError = nil
+    }
+
+    private func verifyToken() async -> Bool {
+        guard token != nil else { return false }
+        do {
+            let (_, response) = try await pingSession.data(for: try authed("/api/ping"))
+            if let http = response as? HTTPURLResponse { return http.statusCode == 200 }
+            return false
+        } catch {
+            return false
+        }
     }
 
     // MARK: - Background heartbeat
@@ -158,14 +238,22 @@ final class ServerConnection: ObservableObject {
                     continue
                 }
 
-                if await self.ping() {
+                switch await self.pingStatus() {
+                case .ok:
                     failures = 0
-                } else {
+                case .unauthorized:
+                    // Token expired (server restarted) — ask for the code again.
+                    self.clearToken()
+                    self.stopHeartbeat()
+                    self.isConnected = false
+                    self.needsCode = true
+                    return
+                case .fail:
                     failures += 1
                     // Be tolerant: only declare a drop after several misses.
                     if failures >= 3 {
                         self.markDisconnected()
-                        break
+                        return
                     }
                 }
             }
@@ -188,50 +276,66 @@ final class ServerConnection: ObservableObject {
     /// (the heartbeat is suspended while backgrounded).
     func checkNow() async {
         guard isConnected else { return }
-        if !(await ping()) {
-            // confirm with one quick retry to avoid a false positive
-            if !(await ping()) { markDisconnected() }
+        switch await pingStatus() {
+        case .ok:
+            break
+        case .unauthorized:
+            clearToken(); stopHeartbeat(); isConnected = false; needsCode = true
+        case .fail:
+            if case .fail = await pingStatus() { markDisconnected() }   // confirm once
         }
     }
 
-    /// A single small, short-timeout health check on the fast ping session.
-    private func ping() async -> Bool {
-        guard let healthURL = try? url("/api/health") else { return false }
-        var request = URLRequest(url: healthURL)
-        request.timeoutInterval = 5
+    private enum PingResult { case ok, fail, unauthorized }
+
+    /// A single small, short-timeout authenticated health check.
+    private func pingStatus() async -> PingResult {
+        guard let request = try? authed("/api/ping") else { return .fail }
+        var req = request
+        req.timeoutInterval = 5
         do {
-            let (_, response) = try await pingSession.data(for: request)
+            let (_, response) = try await pingSession.data(for: req)
             if let http = response as? HTTPURLResponse {
-                return (200..<300).contains(http.statusCode)
+                if http.statusCode == 401 { return .unauthorized }
+                return (200..<300).contains(http.statusCode) ? .ok : .fail
             }
-            return true
+            return .ok
         } catch {
-            return false
+            return .fail
         }
     }
 
     /// Lists a folder on the laptop.
     func list(path: String) async throws -> Listing {
-        let (data, response) = try await session.data(from: try url("/api/list", query: ["path": path]))
+        let (data, response) = try await session.data(for: try authed("/api/list", query: ["path": path]))
         try Self.check(response)
         return try JSONDecoder().decode(Listing.self, from: data)
     }
 
-    /// Direct URL used to stream a video or load an image (AVPlayer / ImageIO).
+    /// Direct URL used to load an image (token attached via fileData) — kept for
+    /// non-authenticated callers; video uses `videoAsset(path:)`.
     func fileURL(path: String) -> URL? {
         try? url("/api/download", query: ["path": path])
     }
 
+    /// AVURLAsset for streaming a video, with the auth token in the HTTP headers.
+    func videoAsset(path: String) -> AVURLAsset? {
+        guard let u = try? url("/api/download", query: ["path": path]) else { return nil }
+        var options: [String: Any] = [:]
+        if let token { options["AVURLAssetHTTPHeaderFieldsKey"] = ["X-Auth-Token": token] }
+        return AVURLAsset(url: u, options: options)
+    }
+
     /// Raw bytes of a file (used to build image thumbnails / full images).
     func fileData(path: String) async throws -> Data {
-        let (data, response) = try await session.data(from: try url("/api/download", query: ["path": path]))
+        let (data, response) = try await session.data(for: try authed("/api/download", query: ["path": path]))
         try Self.check(response)
         return data
     }
 
     /// Downloads a file to a temporary location and returns its local URL.
     func download(path: String, name: String) async throws -> URL {
-        let (data, response) = try await session.data(from: try url("/api/download", query: ["path": path]))
+        let (data, response) = try await session.data(for: try authed("/api/download", query: ["path": path]))
         try Self.check(response)
         let dest = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         try? FileManager.default.removeItem(at: dest)
@@ -373,7 +477,7 @@ final class ServerConnection: ObservableObject {
     /// Streams a file from disk to the laptop (constant low memory), reporting
     /// per-file progress into `activeFractions[index]`.
     func uploadFile(at fileURL: URL, filename: String, index: Int, toPath: String = "") async throws {
-        var request = URLRequest(url: try url("/api/upload", query: ["path": toPath]))
+        var request = try authed("/api/upload", query: ["path": toPath])
         request.httpMethod = "POST"
         request.setValue(filename, forHTTPHeaderField: "X-Filename")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
@@ -389,6 +493,7 @@ final class ServerConnection: ObservableObject {
 
     private static func check(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { return }
+        if http.statusCode == 401 { throw ServerError.unauthorized }
         guard (200..<300).contains(http.statusCode) else {
             throw ServerError.http(http.statusCode)
         }
