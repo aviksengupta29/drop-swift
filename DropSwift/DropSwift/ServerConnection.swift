@@ -67,12 +67,22 @@ final class ServerConnection: ObservableObject {
 
     // Credentials are stored per computer (keyed by its stable Bonjour name when
     // discovered, or host:port for manual entry) so they survive IP changes.
+    private let lastCodeKey = "dropswift.lastCode"
+
     private func tokenKey() -> String { "dropswift.token.\(currentKey)" }
     private func codeKey() -> String { "dropswift.code.\(currentKey)" }
     private func loadToken() -> String? { UserDefaults.standard.string(forKey: tokenKey()) }
     private func saveToken(_ t: String) { UserDefaults.standard.set(t, forKey: tokenKey()) }
-    private func loadCode() -> String? { UserDefaults.standard.string(forKey: codeKey()) }
-    private func saveCode(_ c: String) { UserDefaults.standard.set(c, forKey: codeKey()) }
+    /// Per-computer code, falling back to the last code that ever worked — so a
+    /// key mismatch (IP change, manual vs discovery) never forces a re-prompt.
+    private func loadCode() -> String? {
+        UserDefaults.standard.string(forKey: codeKey())
+            ?? UserDefaults.standard.string(forKey: lastCodeKey)
+    }
+    private func saveCode(_ c: String) {
+        UserDefaults.standard.set(c, forKey: codeKey())
+        UserDefaults.standard.set(c, forKey: lastCodeKey)
+    }
     private func clearToken() {
         token = nil
         UserDefaults.standard.removeObject(forKey: tokenKey())
@@ -210,8 +220,11 @@ final class ServerConnection: ObservableObject {
         isAutoConnecting = true
         defer { isAutoConnecting = false }
 
+        // Auto-connect if we have a code for this computer, or any last-used code.
+        let hasAnyCode = UserDefaults.standard.string(forKey: lastCodeKey) != nil
         for found in servers {
-            guard UserDefaults.standard.string(forKey: "dropswift.code.\(found.id)") != nil else { continue }
+            let hasCode = UserDefaults.standard.string(forKey: "dropswift.code.\(found.id)") != nil || hasAnyCode
+            guard hasCode else { continue }
             currentKey = found.id
             host = found.host
             port = String(found.port)
