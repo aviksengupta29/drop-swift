@@ -65,6 +65,39 @@ final class ServerConnection: ObservableObject {
     private var isAutoConnecting = false
     private var suppressAutoConnect = false  // set after a manual disconnect
 
+    /// Bonjour discovery runs continuously (all tabs) and is the PRIMARY way we
+    /// notice a server vanish — the instant it leaves the list we disconnect.
+    @Published var discoveredServers: [DiscoveredServer] = []
+    private let discovery = Discovery()
+    private var discoverySub: AnyCancellable?
+    private var discoveryStarted = false
+    private var connectedServerId: String?   // Bonjour id of the server we're on
+
+    /// Start continuous discovery + auto-connect / vanish handling (call once).
+    func startDiscovery() {
+        guard !discoveryStarted else { return }
+        discoveryStarted = true
+        discovery.start()
+        discoverySub = discovery.$servers.sink { [weak self] servers in
+            Task { @MainActor in self?.onDiscovered(servers) }
+        }
+    }
+
+    func refreshDiscovery() { discovery.refresh() }
+
+    private func onDiscovered(_ servers: [DiscoveredServer]) {
+        discoveredServers = servers
+        // VANISH: if the computer we're connected to leaves the list, it's gone.
+        // (Skip during a transfer — the live connection is proof it's alive and a
+        // momentary mDNS blip shouldn't interrupt it.)
+        if isConnected, !isTransferring, let id = connectedServerId,
+           !servers.contains(where: { $0.id == id }) {
+            markDisconnected()
+            return
+        }
+        Task { await autoConnectIfKnown(servers) }
+    }
+
     // Credentials are stored per computer (keyed by its stable Bonjour name when
     // discovered, or host:port for manual entry) so they survive IP changes.
     private let lastCodeKey = "dropswift.lastCode"
@@ -167,6 +200,7 @@ final class ServerConnection: ObservableObject {
     func connect(to found: DiscoveredServer) async {
         suppressAutoConnect = false
         currentKey = found.id
+        connectedServerId = found.id
         host = found.host
         port = String(found.port)
         await connect()
@@ -226,6 +260,7 @@ final class ServerConnection: ObservableObject {
             let hasCode = UserDefaults.standard.string(forKey: "dropswift.code.\(found.id)") != nil || hasAnyCode
             guard hasCode else { continue }
             currentKey = found.id
+            connectedServerId = found.id
             host = found.host
             port = String(found.port)
             isConnecting = true
@@ -273,6 +308,7 @@ final class ServerConnection: ObservableObject {
     func disconnect() {
         stopHeartbeat()
         suppressAutoConnect = true
+        connectedServerId = nil
         isConnected = false
         serverName = ""
         lastError = nil
@@ -291,20 +327,21 @@ final class ServerConnection: ObservableObject {
 
     // MARK: - Background heartbeat
 
-    /// Lightweight keep-alive: a tiny `/api/health` GET every few seconds while
-    /// connected. Two misses in a row → mark disconnected and raise the popup.
+    /// Keep-alive: a tiny `/api/health` GET every 2s while connected and IDLE.
+    /// During a transfer it does NOT ping at all (zero impact on transfer
+    /// speed) — a dropped server is detected from the upload failures instead.
+    /// Two misses in a row → mark disconnected and raise the popup (~4s).
     private func startHeartbeat() {
         heartbeat?.cancel()
         heartbeat = Task { [weak self] in
             var failures = 0
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: .seconds(5))   // safety net; vanish is the fast path
                 if Task.isCancelled { break }
                 guard let self else { break }
 
-                // An active transfer is itself proof the server is alive, and a
-                // saturated uplink can delay a tiny health ping. Don't probe
-                // while transferring (or just after) — avoids false drops.
+                // While transferring, the active connection proves the server is
+                // alive and we must not steal any bandwidth — so skip the probe.
                 if self.isTransferring {
                     failures = 0
                     continue
@@ -327,8 +364,7 @@ final class ServerConnection: ObservableObject {
                     }
                 case .fail:
                     failures += 1
-                    // Be tolerant: only declare a drop after several misses.
-                    if failures >= 3 {
+                    if failures >= 2 {
                         self.markDisconnected()
                         return
                     }
@@ -344,6 +380,7 @@ final class ServerConnection: ObservableObject {
 
     private func markDisconnected() {
         stopHeartbeat()
+        connectedServerId = nil
         isConnected = false
         serverName = ""
         didDisconnectUnexpectedly = true

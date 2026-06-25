@@ -33,6 +33,7 @@ struct ContentView: View {
         .sheet(isPresented: $server.needsCode) {
             CodeEntryView().environmentObject(server)
         }
+        .onAppear { server.startDiscovery() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task { await server.checkNow() }

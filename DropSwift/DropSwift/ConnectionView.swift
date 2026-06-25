@@ -9,7 +9,6 @@ import SwiftUI
 
 struct ConnectionView: View {
     @EnvironmentObject var server: ServerConnection
-    @StateObject private var discovery = Discovery()
     @State private var showManual = false
 
     var body: some View {
@@ -37,13 +36,13 @@ struct ConnectionView: View {
 
             // Discovered computers
             Section {
-                if discovery.servers.isEmpty {
+                if server.discoveredServers.isEmpty {
                     HStack(spacing: 10) {
                         ProgressView()
                         Text("Searching for your computer…").foregroundStyle(.secondary)
                     }
                 } else {
-                    ForEach(discovery.servers) { found in
+                    ForEach(server.discoveredServers) { found in
                         Button { Task { await server.connect(to: found) } } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: "laptopcomputer")
@@ -66,11 +65,8 @@ struct ConnectionView: View {
             } header: {
                 HStack {
                     Text("Computers on this Wi‑Fi")
-                    if discovery.isSearching {
-                        ProgressView().controlSize(.mini).padding(.leading, 4)
-                    }
                     Spacer()
-                    Button { discovery.refresh() } label: {
+                    Button { server.refreshDiscovery() } label: {
                         Image(systemName: "arrow.clockwise")
                     }
                     .textCase(nil)
@@ -117,11 +113,6 @@ struct ConnectionView: View {
         }
         .listStyle(.insetGrouped)
         .tint(Theme.accent)
-        .onAppear { discovery.start() }
-        .onDisappear { discovery.stop() }
-        .onChange(of: discovery.servers) { _, servers in
-            Task { await server.autoConnectIfKnown(servers) }
-        }
     }
 
     private var statusText: String {

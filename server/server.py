@@ -22,6 +22,7 @@ import secrets
 import shutil
 import socket
 import subprocess
+import signal
 import sys
 import threading
 import time
@@ -372,6 +373,11 @@ def main():
     server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
 
     method = advertise(args.port)
+
+    # On SIGTERM (e.g. the Mac app stopping us), exit cleanly so the atexit
+    # handlers run and the Bonjour service is unregistered immediately — the
+    # phone then sees this computer vanish from the list right away.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     print("=" * 56)
     print(" DropSwift server is running")
