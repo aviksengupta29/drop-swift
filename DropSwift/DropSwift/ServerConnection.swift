@@ -48,13 +48,18 @@ final class ServerConnection: ObservableObject {
     @Published var transferTotal = 0
     @Published var transferCompleted = 0
     @Published var transferCurrentName = ""
-    @Published var transferFileFraction: Double = 0   // 0...1 for the current file
+    @Published var activeFractions: [Int: Double] = [:]   // in-flight per-file progress
     @Published var transferResult: String?
+
+    /// How many uploads run at once — overlaps photo-library export with network
+    /// transfer and uses several streams (like a download manager).
+    static let maxParallelUploads = 3
 
     /// Overall 0...1 progress across the whole batch.
     var transferOverall: Double {
         guard transferTotal > 0 else { return 0 }
-        return (Double(transferCompleted) + transferFileFraction) / Double(transferTotal)
+        let inflight = activeFractions.values.reduce(0, +)
+        return min(1, (Double(transferCompleted) + inflight) / Double(transferTotal))
     }
 
     private let session: URLSession       // transfers (waits for connectivity)
@@ -237,15 +242,16 @@ final class ServerConnection: ObservableObject {
     /// Max items per batch (keeps memory/UX sane for very large transfers).
     static let maxBatch = 50
 
-    /// Sends each photo/video to the laptop one at a time, STREAMING from disk
-    /// (never loading whole files into memory), keeping the original filename
-    /// and metadata. Honors task cancellation between/within files.
+    /// Sends photos/videos to the laptop, STREAMING each from disk (never loading
+    /// whole files into memory), keeping the original filename + metadata.
+    /// Uploads several files in parallel (overlapping export with transfer) for
+    /// speed, retries transient failures, and honors cancellation.
     func sendPhotos(_ items: [PhotosPickerItem]) async {
         let batch = Array(items.prefix(Self.maxBatch))
         isTransferring = true
         transferTotal = batch.count
         transferCompleted = 0
-        transferFileFraction = 0
+        activeFractions = [:]
         transferResult = nil
         var failures = 0
 
@@ -255,55 +261,28 @@ final class ServerConnection: ObservableObject {
         }
 
         let stamp = Int(Date().timeIntervalSince1970)
-        for (index, item) in batch.enumerated() {
-            if Task.isCancelled { break }
-            transferFileFraction = 0
 
-            // Write the original to a temp file on disk (low memory), then
-            // stream-upload that file (with retries) and delete it.
-            if let (tempURL, name) = await Self.writeOriginalToTemp(for: item) {
-                transferCurrentName = name
-                var sent = false
-                var attempt = 0
-                while attempt < 3 && !Task.isCancelled {
-                    do {
-                        try await uploadFile(at: tempURL, filename: name)
-                        sent = true
-                        break
-                    } catch {
-                        attempt += 1
-                        if attempt < 3 && !Task.isCancelled {
-                            try? await Task.sleep(for: .seconds(2))   // brief backoff, then retry
-                            transferFileFraction = 0
-                        }
-                    }
-                }
-                if sent {
-                    transferCompleted += 1
-                } else if !Task.isCancelled {
-                    failures += 1
-                }
-                try? FileManager.default.removeItem(at: tempURL)
-            } else if let data = try? await item.loadTransferable(type: Data.self) {
-                // Rare fallback for items without a library identifier.
-                let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "dat"
-                let name = "DropSwift_\(stamp)_\(index).\(ext)"
-                transferCurrentName = name
-                do {
-                    try await uploadData(data, filename: name)
-                    transferCompleted += 1
-                } catch {
-                    if !Task.isCancelled { failures += 1 }
-                }
-            } else {
-                failures += 1
+        // Run up to `maxParallelUploads` at once; refill as each finishes.
+        await withTaskGroup(of: Bool.self) { group in
+            var next = 0
+            let limit = min(Self.maxParallelUploads, batch.count)
+            while next < limit {
+                let i = next
+                group.addTask { [weak self] in await self?.uploadOne(batch[i], index: i, stamp: stamp) ?? false }
+                next += 1
             }
-
-            if Task.isCancelled { break }
+            while let ok = await group.next() {
+                if !ok && !Task.isCancelled { failures += 1 }
+                if next < batch.count && !Task.isCancelled {
+                    let i = next
+                    group.addTask { [weak self] in await self?.uploadOne(batch[i], index: i, stamp: stamp) ?? false }
+                    next += 1
+                }
+            }
         }
 
         isTransferring = false
-        transferFileFraction = 0
+        activeFractions = [:]
         if Task.isCancelled {
             transferResult = "Stopped. Sent \(transferCompleted) of \(transferTotal)."
         } else {
@@ -311,6 +290,51 @@ final class ServerConnection: ObservableObject {
                 ? "Sent \(transferCompleted) item(s) to \(serverName)."
                 : "Sent \(transferCompleted), failed \(failures). Check the connection and try again."
         }
+    }
+
+    /// Exports one item to a temp file (original + metadata, or fallback) and
+    /// stream-uploads it with retries. Returns true on success.
+    private func uploadOne(_ item: PhotosPickerItem, index: Int, stamp: Int) async -> Bool {
+        if Task.isCancelled { return false }
+        activeFractions[index] = 0
+
+        let fileURL: URL
+        let name: String
+        if let (tmp, original) = await Self.writeOriginalToTemp(for: item) {
+            fileURL = tmp
+            name = original
+        } else if let data = try? await item.loadTransferable(type: Data.self) {
+            let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "dat"
+            name = "DropSwift_\(stamp)_\(index).\(ext)"
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString + "-" + name)
+            guard (try? data.write(to: tmp)) != nil else { activeFractions[index] = nil; return false }
+            fileURL = tmp
+        } else {
+            activeFractions[index] = nil
+            return false
+        }
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        transferCurrentName = name
+
+        var attempt = 0
+        while attempt < 3 && !Task.isCancelled {
+            do {
+                try await uploadFile(at: fileURL, filename: name, index: index)
+                activeFractions[index] = nil
+                transferCompleted += 1
+                return true
+            } catch {
+                attempt += 1
+                activeFractions[index] = 0
+                if attempt < 3 && !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(2))   // brief backoff, then retry
+                }
+            }
+        }
+        activeFractions[index] = nil
+        return false
     }
 
     /// Writes a picked item's ORIGINAL resource to a temp file on disk, streaming
@@ -347,31 +371,17 @@ final class ServerConnection: ObservableObject {
     }
 
     /// Streams a file from disk to the laptop (constant low memory), reporting
-    /// per-file progress into `transferFileFraction`.
-    func uploadFile(at fileURL: URL, filename: String, toPath: String = "") async throws {
+    /// per-file progress into `activeFractions[index]`.
+    func uploadFile(at fileURL: URL, filename: String, index: Int, toPath: String = "") async throws {
         var request = URLRequest(url: try url("/api/upload", query: ["path": toPath]))
         request.httpMethod = "POST"
         request.setValue(filename, forHTTPHeaderField: "X-Filename")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
         let delegate = UploadProgressDelegate { [weak self] fraction in
-            Task { @MainActor in self?.transferFileFraction = fraction }
+            Task { @MainActor in self?.activeFractions[index] = fraction }
         }
         let (_, response) = try await session.upload(for: request, fromFile: fileURL, delegate: delegate)
-        try Self.check(response)
-    }
-
-    /// Small in-memory upload (fallback path only).
-    func uploadData(_ data: Data, filename: String, toPath: String = "") async throws {
-        var request = URLRequest(url: try url("/api/upload", query: ["path": toPath]))
-        request.httpMethod = "POST"
-        request.setValue(filename, forHTTPHeaderField: "X-Filename")
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-
-        let delegate = UploadProgressDelegate { [weak self] fraction in
-            Task { @MainActor in self?.transferFileFraction = fraction }
-        }
-        let (_, response) = try await session.upload(for: request, from: data, delegate: delegate)
         try Self.check(response)
     }
 
