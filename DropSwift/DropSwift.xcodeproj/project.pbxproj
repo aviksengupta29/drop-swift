@@ -35,6 +35,20 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		87E10A0D2FEC0DC20012D8D2 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				87E10A0E2FEC0DC20012D8D2 /* DropSwiftWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		879C06652FEC0DC10012D8D2 /* DropSwift.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DropSwift.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		879C06722FEC0DC20012D8D2 /* DropSwiftTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DropSwiftTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -121,6 +135,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		872920D22FED9603004819E8 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				87E10A0F2FEC0DC20012D8D2 /* TransferActivityAttributes.swift */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		879C065C2FEC0DC10012D8D2 = {
 			isa = PBXGroup;
 			children = (
@@ -129,6 +151,7 @@
 				879C067F2FEC0DC20012D8D2 /* DropSwiftUITests */,
 				87E10A022FEC0DC20012D8D2 /* DropSwiftWidget */,
 				879C06662FEC0DC10012D8D2 /* Products */,
+				872920D22FED9603004819E8 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -285,20 +308,6 @@
 			);
 		};
 /* End PBXProject section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		87E10A0D2FEC0DC20012D8D2 /* Embed Foundation Extensions */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 13;
-			files = (
-				87E10A0E2FEC0DC20012D8D2 /* DropSwiftWidgetExtension.appex in Embed Foundation Extensions */,
-			);
-			name = "Embed Foundation Extensions";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXResourcesBuildPhase section */
 		879C06632FEC0DC10012D8D2 /* Resources */ = {
