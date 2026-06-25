@@ -74,8 +74,8 @@ final class ServerConnection: ObservableObject {
         // Dedicated session for health pings: ephemeral (no connection reuse /
         // caching) and fails fast so a dropped server is detected quickly.
         let ping = URLSessionConfiguration.ephemeral
-        ping.timeoutIntervalForRequest = 5
-        ping.timeoutIntervalForResource = 6
+        ping.timeoutIntervalForRequest = 8
+        ping.timeoutIntervalForResource = 10
         ping.waitsForConnectivity = false
         ping.requestCachePolicy = .reloadIgnoringLocalCacheData
         ping.urlCache = nil
@@ -141,14 +141,24 @@ final class ServerConnection: ObservableObject {
         heartbeat = Task { [weak self] in
             var failures = 0
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(4))
+                try? await Task.sleep(for: .seconds(5))
                 if Task.isCancelled { break }
                 guard let self else { break }
+
+                // An active transfer is itself proof the server is alive, and a
+                // saturated uplink can delay a tiny health ping. Don't probe
+                // while transferring (or just after) — avoids false drops.
+                if self.isTransferring {
+                    failures = 0
+                    continue
+                }
+
                 if await self.ping() {
                     failures = 0
                 } else {
                     failures += 1
-                    if failures >= 2 {
+                    // Be tolerant: only declare a drop after several misses.
+                    if failures >= 3 {
                         self.markDisconnected()
                         break
                     }
@@ -250,14 +260,28 @@ final class ServerConnection: ObservableObject {
             transferFileFraction = 0
 
             // Write the original to a temp file on disk (low memory), then
-            // stream-upload that file and delete it.
+            // stream-upload that file (with retries) and delete it.
             if let (tempURL, name) = await Self.writeOriginalToTemp(for: item) {
                 transferCurrentName = name
-                do {
-                    try await uploadFile(at: tempURL, filename: name)
+                var sent = false
+                var attempt = 0
+                while attempt < 3 && !Task.isCancelled {
+                    do {
+                        try await uploadFile(at: tempURL, filename: name)
+                        sent = true
+                        break
+                    } catch {
+                        attempt += 1
+                        if attempt < 3 && !Task.isCancelled {
+                            try? await Task.sleep(for: .seconds(2))   // brief backoff, then retry
+                            transferFileFraction = 0
+                        }
+                    }
+                }
+                if sent {
                     transferCompleted += 1
-                } catch {
-                    if !Task.isCancelled { failures += 1 }
+                } else if !Task.isCancelled {
+                    failures += 1
                 }
                 try? FileManager.default.removeItem(at: tempURL)
             } else if let data = try? await item.loadTransferable(type: Data.self) {
