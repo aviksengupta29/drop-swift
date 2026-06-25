@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import UIKit
 import PhotosUI
 import Photos
 import AVFoundation
@@ -405,21 +406,38 @@ final class ServerConnection: ObservableObject {
         return dest
     }
 
-    /// Max items per batch (keeps memory/UX sane for very large transfers).
-    static let maxBatch = 50
+    private var bgTask: UIBackgroundTaskIdentifier = .invalid
 
-    /// Sends photos/videos to the laptop, STREAMING each from disk (never loading
-    /// whole files into memory), keeping the original filename + metadata.
-    /// Uploads several files in parallel (overlapping export with transfer) for
-    /// speed, retries transient failures, and honors cancellation.
+    private func endBackgroundTask() {
+        if bgTask != .invalid {
+            UIApplication.shared.endBackgroundTask(bgTask)
+            bgTask = .invalid
+        }
+    }
+
+    /// Sends an UNLIMITED number of photos/videos to the laptop, STREAMING each
+    /// from disk (constant low memory — handles 1 TB+), keeping the original
+    /// filename + metadata. Uploads several in parallel as a queue that refills,
+    /// retries transient failures, and honors cancellation.
     func sendPhotos(_ items: [PhotosPickerItem]) async {
-        let batch = Array(items.prefix(Self.maxBatch))
+        guard !items.isEmpty else { return }
         isTransferring = true
-        transferTotal = batch.count
+        transferTotal = items.count
         transferCompleted = 0
         activeFractions = [:]
         transferResult = nil
         var failures = 0
+
+        // Keep the screen awake and take a short background grace window so the
+        // transfer isn't interrupted by screen sleep or brief backgrounding.
+        UIApplication.shared.isIdleTimerDisabled = true
+        bgTask = UIApplication.shared.beginBackgroundTask(withName: "DropSwiftTransfer") { [weak self] in
+            Task { @MainActor in self?.endBackgroundTask() }
+        }
+        defer {
+            UIApplication.shared.isIdleTimerDisabled = false
+            endBackgroundTask()
+        }
 
         // Needed to read the original file + filename from the photo library.
         if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
@@ -428,20 +446,22 @@ final class ServerConnection: ObservableObject {
 
         let stamp = Int(Date().timeIntervalSince1970)
 
-        // Run up to `maxParallelUploads` at once; refill as each finishes.
+        // Bounded-concurrency queue: only `maxParallelUploads` items are exported
+        // to temp + uploading at once, so disk/memory stay flat no matter how many
+        // thousands of items are selected. Refills as each finishes.
         await withTaskGroup(of: Bool.self) { group in
             var next = 0
-            let limit = min(Self.maxParallelUploads, batch.count)
+            let limit = min(Self.maxParallelUploads, items.count)
             while next < limit {
                 let i = next
-                group.addTask { [weak self] in await self?.uploadOne(batch[i], index: i, stamp: stamp) ?? false }
+                group.addTask { [weak self] in await self?.uploadOne(items[i], index: i, stamp: stamp) ?? false }
                 next += 1
             }
             while let ok = await group.next() {
                 if !ok && !Task.isCancelled { failures += 1 }
-                if next < batch.count && !Task.isCancelled {
+                if next < items.count && !Task.isCancelled {
                     let i = next
-                    group.addTask { [weak self] in await self?.uploadOne(batch[i], index: i, stamp: stamp) ?? false }
+                    group.addTask { [weak self] in await self?.uploadOne(items[i], index: i, stamp: stamp) ?? false }
                     next += 1
                 }
             }

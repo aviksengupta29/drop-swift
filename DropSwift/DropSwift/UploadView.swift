@@ -39,7 +39,6 @@ struct UploadView: View {
                     Section {
                         PhotosPicker(
                             selection: $selection,
-                            maxSelectionCount: ServerConnection.maxBatch,
                             matching: .any(of: [.images, .videos]),
                             photoLibrary: .shared()
                         ) {
@@ -58,7 +57,7 @@ struct UploadView: View {
                             }
                         }
                     } footer: {
-                        Text("Up to \(ServerConnection.maxBatch) items per transfer.")
+                        Text("Select any number of items. For very large transfers, keep DropSwift open (the screen stays on) and the phone plugged in.")
                     }
 
                     // Live transfer
