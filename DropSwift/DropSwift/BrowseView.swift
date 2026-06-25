@@ -17,16 +17,11 @@ struct BrowseView: View {
                 GalleryView(path: "",
                             title: server.serverName.isEmpty ? "Browse" : server.serverName)
             } else {
-                ZStack {
-                    GlassBackground()
-                    VStack(spacing: 14) {
-                        Image(systemName: "wifi.slash").font(.system(size: 48)).foregroundStyle(.secondary)
-                        Text("Not connected").font(.system(size: 18, weight: .semibold))
-                        Text("Connect to your computer on the Connect tab first.")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center).padding(.horizontal, 30)
-                    }
-                }
+                ContentUnavailableView(
+                    "Not connected",
+                    systemImage: "wifi.slash",
+                    description: Text("Connect to your computer on the Connect tab first.")
+                )
                 .navigationTitle("Browse")
             }
         }
@@ -89,7 +84,6 @@ struct GalleryView: View {
                 ContentUnavailableView("Empty folder", systemImage: "tray").padding(.top, 60)
             }
         }
-        .background(GlassBackground())
         .overlay { if loading && items.isEmpty { ProgressView() } }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
