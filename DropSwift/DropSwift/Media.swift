@@ -137,7 +137,7 @@ struct FolderCell: View {
                 VStack(spacing: 6) {
                     Image(systemName: "folder.fill")
                         .font(.system(size: 34))
-                        .foregroundStyle(Brand.violet)
+                        .foregroundStyle(Theme.accent)
                     Text(name).font(.caption2).lineLimit(1)
                         .foregroundStyle(.primary).padding(.horizontal, 6)
                 }
@@ -335,7 +335,7 @@ struct VideoPlayerView: View {
                     }
                     .padding(.horizontal, 18)
                     .padding(.vertical, 12)
-                    .liquidGlass(Capsule())
+                    .glass(Capsule())
                     .padding(.horizontal, 16)
                     .padding(.bottom, 30)
                 }

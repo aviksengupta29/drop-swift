@@ -2,170 +2,188 @@
 //  ConnectionView.swift
 //  DropSwift
 //
-//  Material 3 styled Connect screen: auto-discovery + manual entry.
+//  Liquid Glass Connect screen: auto-discovery + manual entry.
 //
 
 import SwiftUI
 
 struct ConnectionView: View {
-    @Environment(\.colorScheme) private var scheme
     @EnvironmentObject var server: ServerConnection
     @StateObject private var discovery = Discovery()
     @State private var connecting = false
     @State private var showManual = false
 
-    private let green = Color(red: 0.18, green: 0.80, blue: 0.42)
-    private let red = Color(red: 0.95, green: 0.26, blue: 0.30)
-
     var body: some View {
-        M3Scaffold(topBar: false) {
-            let m3 = M3(scheme)
-            VStack(alignment: .leading, spacing: 16) {
-
-                // Centered hero: logo + big title
-                VStack(spacing: 12) {
-                    Image("AppLogo")
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: 88, height: 88)
-                        .shadow(color: m3.primary.opacity(0.35), radius: 14, y: 6)
-                    Text("DropSwift")
-                        .font(.system(size: 32, weight: .bold))
-                        .foregroundStyle(m3.onSurface)
-                    Text("Send files between your phone and computer")
-                        .font(.system(size: 14))
-                        .foregroundStyle(m3.onSurfaceVariant)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 28)
-                .padding(.bottom, 12)
-
-                // Discovered computers (with a refresh button)
-                HStack(spacing: 4) {
-                    Text("COMPUTERS ON THIS WI-FI")
-                        .font(.system(size: 12, weight: .semibold))
-                        .tracking(0.6)
-                        .foregroundStyle(m3.onSurfaceVariant)
-                    if discovery.isSearching {
-                        ProgressView().controlSize(.mini)
-                    }
-                    Spacer()
-                    Button { discovery.refresh() } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(m3.primary)
-                            .frame(width: 32, height: 32)
-                            .background(m3.primaryContainer.opacity(0.5), in: Circle())
-                    }
-                }
-                .padding(.leading, 8)
-                .padding(.top, 6)
-
-                M3Card(padding: 8) {
-                    VStack(spacing: 0) {
-                        if discovery.servers.isEmpty {
-                            HStack(spacing: 12) {
-                                ProgressView().tint(m3.primary)
-                                Text("Searching for your computer…")
-                                    .font(.system(size: 15))
-                                    .foregroundStyle(m3.onSurfaceVariant)
-                                Spacer()
-                            }
-                            .padding(8)
-                        } else {
-                            ForEach(Array(discovery.servers.enumerated()), id: \.element.id) { idx, found in
-                                Button { Task { await connect(to: found) } } label: {
-                                    M3ListItem(
-                                        icon: "laptopcomputer",
-                                        headline: found.name,
-                                        supporting: "\(found.host):\(found.port)",
-                                        trailingSelected: server.isConnected && server.host == found.host
-                                    )
-                                    .padding(8)
-                                }
-                                .buttonStyle(.plain)
-                                if idx < discovery.servers.count - 1 {
-                                    Divider().overlay(m3.outlineVariant)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Status pill — glows green when connected
-                GlowingPill(glowColor: green, glowing: server.isConnected,
-                            neutralBorder: m3.outlineVariant, fill: m3.surfaceContainerHigh) {
-                    HStack(spacing: 9) {
-                        if connecting {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Circle()
-                                .fill(server.isConnected ? green : (server.lastError != nil ? m3.error : m3.outline))
-                                .frame(width: 9, height: 9)
-                                .shadow(color: server.isConnected ? green : .clear,
-                                        radius: server.isConnected ? 4 : 0)
-                        }
-                        Text(statusText)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(m3.onSurface)
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, 16)
-                }
-                .padding(.vertical, 2)
-
-                // Disconnect pill — only while connected; steady red, same size
-                if server.isConnected {
-                    Button { withAnimation { server.disconnect() } } label: {
-                        GlowingPill(glowColor: red, glowing: false,
-                                    neutralBorder: red, fill: m3.surfaceContainerHigh) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "wifi.slash")
-                                Text("Disconnect").font(.system(size: 15, weight: .semibold))
-                            }
-                            .foregroundStyle(red)
-                            .padding(.horizontal, 16)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                // Manual entry
-                M3OutlinedButton(title: showManual ? "Hide manual entry" : "Enter address manually",
-                                 icon: "keyboard") {
-                    withAnimation { showManual.toggle() }
-                }
-
-                if showManual {
-                    M3Card {
-                        VStack(spacing: 12) {
-                            M3TextField(label: "Host (e.g. 192.168.1.5)", text: $server.host,
-                                        keyboard: .numbersAndPunctuation)
-                            M3TextField(label: "Port (e.g. 8080)", text: $server.port,
-                                        keyboard: .numberPad)
-                            M3FilledButton(title: "Connect", icon: "link",
-                                           enabled: !connecting) {
-                                Task {
-                                    connecting = true
-                                    await server.connect()
-                                    connecting = false
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Text("Make sure the DropSwift server is running on your computer and both devices are on the same Wi-Fi.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(m3.onSurfaceVariant)
+        GlassScreen {
+            VStack(spacing: 18) {
+                hero
+                discovered
+                statusPill
+                if server.isConnected { disconnectButton }
+                manual
+                Text("Make sure the DropSwift server is running and both devices are on the same Wi‑Fi.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
                     .padding(.horizontal, 8)
-                    .padding(.top, 4)
+                    .padding(.top, 2)
             }
         }
         .onAppear { discovery.start() }
         .onDisappear { discovery.stop() }
     }
+
+    // MARK: Hero
+
+    private var hero: some View {
+        VStack(spacing: 12) {
+            Image("AppLogo")
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 88, height: 88)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .shadow(color: Theme.accent.opacity(0.35), radius: 16, y: 8)
+            Text("DropSwift")
+                .font(.system(size: 32, weight: .bold, design: .rounded))
+            Text("Send files between your phone and computer")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 24)
+        .padding(.bottom, 4)
+    }
+
+    // MARK: Discovered computers
+
+    private var discovered: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("COMPUTERS ON THIS WI‑FI")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if discovery.isSearching { ProgressView().controlSize(.mini) }
+                Spacer()
+                Button { discovery.refresh() } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .tint(Theme.accent)
+            }
+            .padding(.horizontal, 6)
+
+            VStack(spacing: 0) {
+                if discovery.servers.isEmpty {
+                    HStack(spacing: 12) {
+                        ProgressView().controlSize(.small)
+                        Text("Searching for your computer…").foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(16)
+                } else {
+                    ForEach(Array(discovery.servers.enumerated()), id: \.element.id) { idx, found in
+                        Button { Task { await connect(to: found) } } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: "laptopcomputer")
+                                    .font(.title3).foregroundStyle(Theme.accent).frame(width: 38)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(found.name).foregroundStyle(.primary)
+                                    Text("\(found.host):\(found.port)").font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if server.isConnected && server.host == found.host {
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.green)
+                                }
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 12)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        if idx < discovery.servers.count - 1 { Divider().padding(.leading, 16) }
+                    }
+                }
+            }
+            .glass(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+    }
+
+    // MARK: Status + disconnect
+
+    private var statusPill: some View {
+        GlowPill(tint: server.isConnected ? Theme.green : nil,
+                 glow: server.isConnected, pulse: server.isConnected) {
+            HStack(spacing: 9) {
+                if connecting {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Circle()
+                        .fill(server.isConnected ? Theme.green : (server.lastError != nil ? Theme.red : Color.secondary))
+                        .frame(width: 9, height: 9)
+                }
+                Text(statusText).font(.system(size: 15, weight: .semibold))
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private var disconnectButton: some View {
+        Button { withAnimation { server.disconnect() } } label: {
+            GlowPill(tint: Theme.red) {
+                HStack(spacing: 8) {
+                    Image(systemName: "wifi.slash")
+                    Text("Disconnect").font(.system(size: 15, weight: .semibold))
+                }
+                .foregroundStyle(Theme.red)
+                .padding(.horizontal, 16)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Manual entry
+
+    private var manual: some View {
+        VStack(spacing: 12) {
+            Button { withAnimation { showManual.toggle() } } label: {
+                Label(showManual ? "Hide manual entry" : "Enter address manually", systemImage: "keyboard")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.glass)
+            .tint(Theme.accent)
+
+            if showManual {
+                VStack(spacing: 12) {
+                    field("Host (e.g. 192.168.1.5)", text: $server.host, keyboard: .numbersAndPunctuation)
+                    field("Port (e.g. 8080)", text: $server.port, keyboard: .numberPad)
+                    Button {
+                        Task { connecting = true; await server.connect(); connecting = false }
+                    } label: {
+                        Text("Connect").frame(maxWidth: .infinity).padding(.vertical, 6)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .tint(Theme.accent)
+                    .disabled(connecting)
+                }
+                .padding(16)
+                .glass(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            }
+        }
+    }
+
+    private func field(_ label: String, text: Binding<String>, keyboard: UIKeyboardType) -> some View {
+        TextField(label, text: text)
+            .keyboardType(keyboard)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+            .padding(.horizontal, 16)
+            .frame(height: 50)
+            .glass(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    // MARK: Helpers
 
     private var statusText: String {
         if server.isConnected { return "Connected to \(server.serverName)" }
@@ -183,118 +201,67 @@ struct ConnectionView: View {
     }
 }
 
-/// A full-width capsule whose border glows (with a soft pulse) when active.
-/// Used for both the status pill and the disconnect pill so they match in size.
-struct GlowingPill<Content: View>: View {
-    let glowColor: Color
-    let glowing: Bool
-    let neutralBorder: Color
-    let fill: Color
-    @ViewBuilder var content: () -> Content
-    @State private var pulse = false
-
-    var body: some View {
-        content()
-            .frame(maxWidth: .infinity)
-            .frame(height: 52)
-            .background(Capsule().fill(fill))
-            .overlay(Capsule().strokeBorder(glowing ? glowColor : neutralBorder,
-                                            lineWidth: glowing ? 1.8 : 1))
-            .shadow(color: glowing ? glowColor.opacity(pulse ? 0.85 : 0.25) : .clear,
-                    radius: glowing ? (pulse ? 16 : 5) : 0)
-            .onAppear { update() }
-            .onChange(of: glowing) { _, _ in update() }
-    }
-
-    private func update() {
-        if glowing {
-            withAnimation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true)) { pulse = true }
-        } else {
-            pulse = false
-        }
-    }
-}
-
 /// Sheet that asks for the server's 6-digit access code.
 struct CodeEntryView: View {
-    @Environment(\.colorScheme) private var scheme
     @EnvironmentObject var server: ServerConnection
     @Environment(\.dismiss) private var dismiss
     @State private var code = ""
     @State private var submitting = false
 
     var body: some View {
-        let m3 = M3(scheme)
-        VStack(spacing: 16) {
-            Image(systemName: "lock.shield.fill")
-                .font(.system(size: 44))
-                .foregroundStyle(m3.primary)
-                .padding(.top, 28)
-            Text("Enter access code")
-                .font(.system(size: 20, weight: .bold))
-                .foregroundStyle(m3.onSurface)
-            Text("Type the 6-digit code shown in the DropSwift app on \(server.serverName.isEmpty ? "your computer" : server.serverName).")
-                .font(.system(size: 14))
-                .foregroundStyle(m3.onSurfaceVariant)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 28)
+        ZStack {
+            GlassBackground()
+            VStack(spacing: 16) {
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.top, 30)
+                Text("Enter access code")
+                    .font(.system(size: 20, weight: .bold))
+                Text("Type the 6-digit code shown in the DropSwift app on \(server.serverName.isEmpty ? "your computer" : server.serverName).")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
 
-            TextField("000000", text: $code)
-                .keyboardType(.numberPad)
-                .multilineTextAlignment(.center)
-                .font(.system(size: 34, weight: .bold, design: .monospaced))
-                .tracking(8)
-                .frame(height: 62)
-                .frame(maxWidth: .infinity)
-                .background(RoundedRectangle(cornerRadius: 14).fill(m3.surfaceContainerHigh))
-                .padding(.horizontal, 40)
-                .onChange(of: code) { _, v in code = String(v.filter(\.isNumber).prefix(6)) }
+                TextField("000000", text: $code)
+                    .keyboardType(.numberPad)
+                    .multilineTextAlignment(.center)
+                    .font(.system(size: 34, weight: .bold, design: .monospaced))
+                    .tracking(8)
+                    .frame(height: 64)
+                    .frame(maxWidth: .infinity)
+                    .glass(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .padding(.horizontal, 40)
+                    .onChange(of: code) { _, v in code = String(v.filter(\.isNumber).prefix(6)) }
 
-            if let err = server.lastError {
-                Text(err).font(.footnote).foregroundStyle(m3.error)
-            }
-
-            M3FilledButton(title: submitting ? "Checking…" : "Connect",
-                           icon: "checkmark.circle",
-                           enabled: code.count == 6 && !submitting) {
-                Task {
-                    submitting = true
-                    await server.submitCode(code)
-                    submitting = false
-                    if server.isConnected { dismiss() }
+                if let err = server.lastError {
+                    Text(err).font(.footnote).foregroundStyle(Theme.red)
                 }
+
+                Button {
+                    Task {
+                        submitting = true
+                        await server.submitCode(code)
+                        submitting = false
+                        if server.isConnected { dismiss() }
+                    }
+                } label: {
+                    Text(submitting ? "Checking…" : "Connect")
+                        .frame(maxWidth: .infinity).padding(.vertical, 6)
+                }
+                .buttonStyle(.glassProminent)
+                .tint(Theme.accent)
+                .disabled(code.count != 6 || submitting)
+                .padding(.horizontal, 24)
+
+                Button("Cancel") { dismiss() }
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 8)
+
+                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 24)
-
-            Button("Cancel") { dismiss() }
-                .foregroundStyle(m3.onSurfaceVariant)
-                .padding(.bottom, 8)
-
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity)
-        .background(m3.surface.ignoresSafeArea())
         .presentationDetents([.medium])
-    }
-}
-
-/// Material 3 outlined text field.
-struct M3TextField: View {
-    @Environment(\.colorScheme) private var scheme
-    let label: String
-    @Binding var text: String
-    var keyboard: UIKeyboardType = .default
-
-    var body: some View {
-        let m3 = M3(scheme)
-        TextField(label, text: $text)
-            .keyboardType(keyboard)
-            .autocorrectionDisabled()
-            .textInputAutocapitalization(.never)
-            .foregroundStyle(m3.onSurface)
-            .padding(.horizontal, 16)
-            .frame(height: 52)
-            .frame(maxWidth: .infinity)
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(m3.outline, lineWidth: 1))
     }
 }

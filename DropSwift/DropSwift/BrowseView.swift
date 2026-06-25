@@ -2,39 +2,32 @@
 //  BrowseView.swift
 //  DropSwift
 //
-//  Material 3 styled gallery: square photo/video thumbnails, tap to open a
-//  swipeable full-screen viewer, folders to navigate.
+//  Liquid Glass gallery: square thumbnails under a native glass nav bar,
+//  tap to open a swipeable viewer, folders to navigate.
 //
 
 import SwiftUI
 
 struct BrowseView: View {
-    @Environment(\.colorScheme) private var scheme
     @EnvironmentObject var server: ServerConnection
 
     var body: some View {
         NavigationStack {
             if server.isConnected {
                 GalleryView(path: "",
-                            title: server.serverName.isEmpty ? "Browse" : server.serverName,
-                            isRoot: true)
+                            title: server.serverName.isEmpty ? "Browse" : server.serverName)
             } else {
-                let m3 = M3(scheme)
-                M3Scaffold(title: "Browse", showLogo: true, scrolls: false) {
-                    VStack {
-                        Spacer(minLength: 0)
-                        VStack(spacing: 14) {
-                            Image(systemName: "wifi.slash").font(.system(size: 48)).foregroundStyle(m3.onSurfaceVariant)
-                            Text("Not connected").font(.system(size: 18, weight: .semibold)).foregroundStyle(m3.onSurface)
-                            Text("Connect to your computer on the Connect tab first.")
-                                .font(.system(size: 14)).foregroundStyle(m3.onSurfaceVariant)
-                                .multilineTextAlignment(.center)
-                        }
-                        Spacer(minLength: 0)
+                ZStack {
+                    GlassBackground()
+                    VStack(spacing: 14) {
+                        Image(systemName: "wifi.slash").font(.system(size: 48)).foregroundStyle(.secondary)
+                        Text("Not connected").font(.system(size: 18, weight: .semibold))
+                        Text("Connect to your computer on the Connect tab first.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center).padding(.horizontal, 30)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 70)
                 }
+                .navigationTitle("Browse")
             }
         }
     }
@@ -49,12 +42,9 @@ struct PagerData: Identifiable {
 
 /// One folder shown as a gallery grid.
 struct GalleryView: View {
-    @Environment(\.colorScheme) private var scheme
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var server: ServerConnection
     let path: String
     let title: String
-    var isRoot: Bool = false
 
     @State private var items: [RemoteFile] = []
     @State private var loading = false
@@ -73,38 +63,37 @@ struct GalleryView: View {
     }
 
     var body: some View {
-        M3Scaffold(title: title, showLogo: isRoot, showBack: !isRoot,
-                   onBack: { dismiss() }, scrolls: false) {
-            ScrollView {
-                if let error {
-                    Text(error).foregroundStyle(M3(scheme).error).padding()
-                }
-                LazyVGrid(columns: columns, spacing: 2) {
-                    ForEach(folders) { folder in
-                        NavigationLink {
-                            GalleryView(path: childPath(folder.name), title: folder.name)
-                        } label: {
-                            FolderCell(name: folder.name)
-                        }
-                        .buttonStyle(.plain)
+        ScrollView {
+            if let error {
+                Text(error).foregroundStyle(Theme.red).padding()
+            }
+            LazyVGrid(columns: columns, spacing: 2) {
+                ForEach(folders) { folder in
+                    NavigationLink {
+                        GalleryView(path: childPath(folder.name), title: folder.name)
+                    } label: {
+                        FolderCell(name: folder.name)
                     }
-                    ForEach(files) { file in
-                        Button { tap(file) } label: {
-                            MediaCell(file: file, path: childPath(file.name))
-                        }
-                        .buttonStyle(.plain)
-                    }
+                    .buttonStyle(.plain)
                 }
-                .padding(.bottom, 130)
-
-                if items.isEmpty && !loading {
-                    ContentUnavailableView("Empty folder", systemImage: "tray").padding(.top, 60)
+                ForEach(files) { file in
+                    Button { tap(file) } label: {
+                        MediaCell(file: file, path: childPath(file.name))
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .overlay { if loading && items.isEmpty { ProgressView() } }
-            .refreshable { await load() }
+            .padding(.bottom, 130)
+
+            if items.isEmpty && !loading {
+                ContentUnavailableView("Empty folder", systemImage: "tray").padding(.top, 60)
+            }
         }
-        .toolbar(.hidden, for: .navigationBar)
+        .background(GlassBackground())
+        .overlay { if loading && items.isEmpty { ProgressView() } }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await load() }
         .task { await load() }
         .fullScreenCover(item: $pager) { data in
             MediaPager(items: data.items, startIndex: data.start)
@@ -138,17 +127,13 @@ struct GalleryView: View {
         let server = self.server
         let path = self.path
         do {
-            // Run the fetch in a detached task so SwiftUI cancelling the
-            // pull-to-refresh task doesn't abort the request mid-flight.
             let listing = try await Task.detached(priority: .userInitiated) {
                 try await server.list(path: path)
             }.value
             items = listing.items
             error = nil
         } catch is CancellationError {
-            // Benign — keep showing the current files.
         } catch let urlError as URLError where urlError.code == .cancelled {
-            // Benign — keep showing the current files.
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

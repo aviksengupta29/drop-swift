@@ -8,12 +8,11 @@
 import SwiftUI
 
 struct ContentView: View {
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var server = ServerConnection()
 
     var body: some View {
-        // Native Liquid Glass tab bar, tinted with the Material 3 primary.
+        // Native Liquid Glass tab bar, tinted with the brand accent.
         TabView {
             ConnectionView()
                 .tabItem { Label("Connect", systemImage: "wifi") }
@@ -24,7 +23,7 @@ struct ContentView: View {
             UploadView()
                 .tabItem { Label("Send", systemImage: "square.and.arrow.up") }
         }
-        .tint(M3(scheme).primary)
+        .tint(Theme.accent)
         .environmentObject(server)
         .alert("Disconnected", isPresented: $server.didDisconnectUnexpectedly) {
             Button("OK", role: .cancel) { }

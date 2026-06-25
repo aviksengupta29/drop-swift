@@ -11,33 +11,35 @@ import SwiftUI
 import AppKit
 import Darwin
 
-// MARK: - Material 3 theme (matches the iOS app)
+// MARK: - Liquid Glass theme (matches the iOS app)
 
-extension Color {
-    init(hex: UInt32) {
-        self.init(.sRGB,
-                  red: Double((hex >> 16) & 0xFF) / 255,
-                  green: Double((hex >> 8) & 0xFF) / 255,
-                  blue: Double(hex & 0xFF) / 255, opacity: 1)
+enum Theme {
+    static let accent = Color(red: 0.42, green: 0.28, blue: 1.0)
+    static let green  = Color(red: 0.18, green: 0.80, blue: 0.42)
+    static let red    = Color(red: 0.95, green: 0.27, blue: 0.32)
+}
+
+extension View {
+    func glass<S: Shape>(_ shape: S) -> some View {
+        glassEffect(.regular, in: shape)
     }
 }
 
-struct M3 {
-    let dark: Bool
-    init(_ scheme: ColorScheme) { dark = scheme == .dark }
-    private func c(_ l: UInt32, _ d: UInt32) -> Color { Color(hex: dark ? d : l) }
-
-    var primary: Color { c(0x6750A4, 0xD0BCFF) }
-    var onPrimary: Color { c(0xFFFFFF, 0x381E72) }
-    var primaryContainer: Color { c(0xEADDFF, 0x4F378B) }
-    var secondaryContainer: Color { c(0xE8DEF8, 0x4A4458) }
-    var onSecondaryContainer: Color { c(0x1D192B, 0xE8DEF8) }
-    var error: Color { c(0xB3261E, 0xF2B8B5) }
-    var surface: Color { c(0xFEF7FF, 0x141218) }
-    var onSurface: Color { c(0x1D1B20, 0xE6E0E9) }
-    var onSurfaceVariant: Color { c(0x49454F, 0xCAC4D0) }
-    var surfaceContainerHigh: Color { c(0xECE6F0, 0x2B2930) }
-    var outlineVariant: Color { c(0xCAC4D0, 0x49454F) }
+/// Minimal backdrop: window background + a soft accent glow.
+struct GlassBackground: View {
+    @Environment(\.colorScheme) private var scheme
+    var body: some View {
+        ZStack {
+            Color(nsColor: .windowBackgroundColor)
+            Circle()
+                .fill(Theme.accent)
+                .frame(width: 420, height: 420)
+                .blur(radius: 140)
+                .opacity(scheme == .dark ? 0.40 : 0.16)
+                .offset(x: 130, y: -240)
+        }
+        .ignoresSafeArea()
+    }
 }
 
 // MARK: - Server controller
@@ -170,39 +172,43 @@ final class ServerController: ObservableObject {
 // MARK: - Main view (Material 3 — matches the iOS app)
 
 struct ServerView: View {
-    @Environment(\.colorScheme) private var scheme
     @EnvironmentObject var server: ServerController
 
     var body: some View {
-        let m3 = M3(scheme)
         ZStack {
-            m3.surface.ignoresSafeArea()
+            GlassBackground()
 
             VStack(spacing: 18) {
                 logo
                 Text("DropSwift Server")
                     .font(.system(size: 25, weight: .bold))
-                    .foregroundStyle(m3.onSurface)
                 Text("Sharing files over your local Wi‑Fi")
                     .font(.subheadline)
-                    .foregroundStyle(m3.onSurfaceVariant)
+                    .foregroundStyle(.secondary)
 
                 MacStatusPill(running: server.isRunning)
-                infoCard(m3)
+                infoCard
 
                 HStack(spacing: 12) {
-                    m3Button("Choose Folder", icon: "folder",
-                             bg: m3.secondaryContainer, fg: m3.onSecondaryContainer,
-                             action: server.chooseFolder)
-                    m3Button(server.isRunning ? "Stop" : "Start",
-                             icon: server.isRunning ? "stop.fill" : "play.fill",
-                             bg: server.isRunning ? m3.error : m3.primary, fg: m3.onPrimary,
-                             action: { server.isRunning ? server.stop() : server.start() })
+                    Button(action: server.chooseFolder) {
+                        Label("Choose Folder", systemImage: "folder")
+                            .frame(maxWidth: .infinity).padding(.vertical, 6)
+                    }
+                    .buttonStyle(.glass)
+                    .tint(Theme.accent)
+
+                    Button { server.isRunning ? server.stop() : server.start() } label: {
+                        Label(server.isRunning ? "Stop" : "Start",
+                              systemImage: server.isRunning ? "stop.fill" : "play.fill")
+                            .frame(maxWidth: .infinity).padding(.vertical, 6)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .tint(server.isRunning ? Theme.red : Theme.accent)
                 }
 
                 Text("Open DropSwift on your phone — it finds this Mac automatically.")
                     .font(.caption)
-                    .foregroundStyle(m3.onSurfaceVariant)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.top, 2)
             }
@@ -221,47 +227,43 @@ struct ServerView: View {
             }
         }
         .frame(width: 92, height: 92)
-        .shadow(color: M3(scheme).primary.opacity(0.35), radius: 14, y: 6)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .shadow(color: Theme.accent.opacity(0.35), radius: 14, y: 6)
     }
 
-    private func infoCard(_ m3: M3) -> some View {
+    private var infoCard: some View {
         VStack(spacing: 0) {
-            // Access code — emphasized.
             HStack {
-                Text("Access code").foregroundStyle(m3.onSurfaceVariant)
+                Text("Access code").foregroundStyle(.secondary)
                 Spacer()
                 Text(server.code)
                     .font(.system(size: 22, weight: .bold, design: .monospaced))
                     .tracking(3)
-                    .foregroundStyle(m3.primary)
-                Button { server.regenerateCode() } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(m3.onSurfaceVariant)
-                .help("Generate a new code")
+                    .foregroundStyle(Theme.accent)
+                Button { server.regenerateCode() } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Generate a new code")
             }
             .font(.callout)
             .padding(.horizontal, 18)
             .padding(.vertical, 11)
-            Divider().overlay(m3.outlineVariant)
-            row(m3, "IP Address", server.ip)
-            Divider().overlay(m3.outlineVariant)
-            row(m3, "Port", String(server.port))
-            Divider().overlay(m3.outlineVariant)
-            row(m3, "Saving to", server.folder.path)
+            Divider()
+            row("IP Address", server.ip)
+            Divider()
+            row("Port", String(server.port))
+            Divider()
+            row("Saving to", server.folder.path)
         }
         .padding(.vertical, 6)
-        .background(m3.surfaceContainerHigh,
-                    in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .glass(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
-    private func row(_ m3: M3, _ label: String, _ value: String) -> some View {
+    private func row(_ label: String, _ value: String) -> some View {
         HStack {
-            Text(label).foregroundStyle(m3.onSurfaceVariant)
+            Text(label).foregroundStyle(.secondary)
             Spacer()
             Text(value)
-                .foregroundStyle(m3.onSurface)
                 .lineLimit(1).truncationMode(.middle)
                 .frame(maxWidth: 220, alignment: .trailing)
         }
@@ -269,47 +271,26 @@ struct ServerView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 11)
     }
-
-    private func m3Button(_ title: String, icon: String, bg: Color, fg: Color,
-                          action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                Text(title).fontWeight(.semibold)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-            .foregroundStyle(fg)
-            .background(bg, in: Capsule())
-        }
-        .buttonStyle(.plain)
-    }
 }
 
-/// Status pill, isolated so its animation never re-renders the rest of the UI.
-/// Steady green when running; flashing red boundary glow when stopped.
+/// Status pill (glass), isolated so its animation never re-renders the rest of
+/// the UI. Steady green when running; flashing red glow when stopped.
 struct MacStatusPill: View {
-    @Environment(\.colorScheme) private var scheme
     let running: Bool
     @State private var pulse = false
 
     var body: some View {
-        let m3 = M3(scheme)
-        let green = Color(red: 0.18, green: 0.80, blue: 0.42)
-        let red = Color(red: 0.95, green: 0.26, blue: 0.30)
-        let color = running ? green : red
-
+        let color = running ? Theme.green : Theme.red
         return HStack(spacing: 9) {
             Circle().fill(color).frame(width: 9, height: 9)
             Text(running ? "Running" : "Stopped")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(m3.onSurface)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 48)
-        .background(Capsule().fill(m3.surfaceContainerHigh))
-        .overlay(Capsule().strokeBorder(color, lineWidth: 1.8))
-        .shadow(color: running ? green.opacity(0.45) : red.opacity(pulse ? 0.9 : 0.2),
+        .glass(Capsule())
+        .overlay(Capsule().strokeBorder(color, lineWidth: 1.6))
+        .shadow(color: running ? Theme.green.opacity(0.45) : Theme.red.opacity(pulse ? 0.9 : 0.2),
                 radius: running ? 7 : (pulse ? 16 : 4))
         .onAppear { update() }
         .onChange(of: running) { _, _ in update() }
