@@ -70,17 +70,19 @@ final class ServerConnection: ObservableObject {
     @Published var discoveredServers: [DiscoveredServer] = []
     private let discovery = Discovery()
     private var discoverySub: AnyCancellable?
-    private var discoveryStarted = false
     private var connectedServerId: String?   // Bonjour id of the server we're on
 
-    /// Start continuous discovery + auto-connect / vanish handling (call once).
+    /// Start (or re-arm) Bonjour discovery. Safe to call repeatedly — we restart
+    /// the browser each time so it recovers after backgrounding, a network change,
+    /// or the Local Network permission being granted after launch. Re-starting the
+    /// browser does NOT clear the current list, so connected servers don't flicker.
     func startDiscovery() {
-        guard !discoveryStarted else { return }
-        discoveryStarted = true
-        discovery.start()
-        discoverySub = discovery.$servers.sink { [weak self] servers in
-            Task { @MainActor in self?.onDiscovered(servers) }
+        if discoverySub == nil {
+            discoverySub = discovery.$servers.sink { [weak self] servers in
+                Task { @MainActor in self?.onDiscovered(servers) }
+            }
         }
+        discovery.start()
     }
 
     func refreshDiscovery() { discovery.refresh() }

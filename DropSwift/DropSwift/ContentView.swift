@@ -38,7 +38,10 @@ struct ContentView: View {
         }
         .onAppear { server.startDiscovery() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await server.checkNow() } }
+            if phase == .active {
+                server.startDiscovery()   // re-arm browser after backgrounding / permission grant
+                Task { await server.checkNow() }
+            }
         }
         .onChange(of: tab) { _, _ in Haptics.selection() }
     }

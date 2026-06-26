@@ -47,7 +47,20 @@ final class Discovery: ObservableObject {
         }
         browser.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
-                if case .failed = state { self?.isSearching = false }
+                guard let self else { return }
+                switch state {
+                case .ready:
+                    self.isSearching = true
+                case .failed:
+                    // Transient failure — drop this browser and rebuild shortly.
+                    self.isSearching = false
+                    try? await Task.sleep(for: .seconds(3))
+                    if self.browser === browser { self.start() }
+                case .cancelled:
+                    self.isSearching = false
+                default:
+                    break
+                }
             }
         }
         browser.start(queue: .main)

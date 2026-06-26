@@ -12,6 +12,7 @@ import Combine
 struct ConnectionView: View {
     @EnvironmentObject var server: ServerConnection
     @State private var showManual = false
+    @State private var showHelp = false
 
     var body: some View {
         ScrollView {
@@ -102,9 +103,34 @@ struct ConnectionView: View {
                         .foregroundStyle(server.lastError == nil ? .secondary : Color(Theme.error))
                         .multilineTextAlignment(.center)
                 }
+                if showHelp {
+                    VStack(spacing: Space.s) {
+                        Divider()
+                        Text("Still can't find it? Make sure **Local Network** access is enabled for DropSwift, both devices are on the same Wi‑Fi, and the server is running.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button {
+                            Haptics.light()
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        } label: {
+                            Text("Open Settings").font(.system(size: 14, weight: .semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.accent)
+                    }
+                    .transition(.opacity)
+                }
             }
             .frame(maxWidth: .infinity)
             .appCard(padding: Space.xl)
+            .task(id: server.discoveredServers.isEmpty) {
+                showHelp = false
+                guard server.discoveredServers.isEmpty else { return }
+                try? await Task.sleep(for: .seconds(7))
+                if server.discoveredServers.isEmpty { withAnimation { showHelp = true } }
+            }
         } else {
             VStack(alignment: .leading, spacing: Space.m) {
                 SectionHeader("Computers nearby") {
