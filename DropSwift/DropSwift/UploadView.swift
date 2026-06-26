@@ -17,36 +17,37 @@ struct UploadView: View {
     @State private var sendTask: Task<Void, Never>?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Space.l) {
-                header
-
-                if server.isConnected {
-                    if server.isTransferring {
-                        transferCard
-                    } else {
-                        uploadArea
-                        if !selection.isEmpty { readyCard }
-                        if let result = server.transferResult { resultCard(result) }
+        Group {
+            if server.isConnected {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Space.l) {
+                        header
+                        if server.isTransferring {
+                            transferCard
+                        } else {
+                            uploadArea
+                            if !selection.isEmpty { readyCard }
+                            if let result = server.transferResult { resultCard(result) }
+                        }
                     }
-                } else {
-                    EmptyState(
-                        icon: "wifi.slash",
-                        title: "Not connected",
-                        message: "Connect to your computer first, then send photos and videos at full quality.",
-                        actionTitle: "Go to Connect",
-                        action: goToConnect
-                    )
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, Space.xl)
+                    .padding(.horizontal, Space.l)
+                    .padding(.bottom, 130)
+                    .animation(.spring(response: 0.5, dampingFraction: 0.85), value: server.isTransferring)
+                    .animation(.spring(response: 0.5, dampingFraction: 0.85), value: selection.isEmpty)
                 }
+                .scrollIndicators(.hidden)
+            } else {
+                EmptyState(
+                    icon: "wifi.slash",
+                    title: "Not connected",
+                    message: "Connect to your computer first to send photos and videos at full quality.",
+                    actionTitle: "Go to Connect",
+                    action: goToConnect
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.bottom, 80)
             }
-            .padding(.horizontal, Space.l)
-            .padding(.bottom, 130)
-            .animation(.spring(response: 0.5, dampingFraction: 0.85), value: server.isTransferring)
-            .animation(.spring(response: 0.5, dampingFraction: 0.85), value: selection.isEmpty)
         }
-        .scrollIndicators(.hidden)
         .onChange(of: server.transferResult) { _, new in
             if new != nil { Haptics.success() }
         }

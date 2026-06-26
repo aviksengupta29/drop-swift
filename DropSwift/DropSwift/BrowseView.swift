@@ -27,7 +27,9 @@ struct BrowseView: View {
                         actionTitle: "Go to Connect",
                         action: goToConnect
                     )
-                    .navigationTitle("Browse")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.bottom, 80)
+                    .toolbar(.hidden, for: .navigationBar)
                 }
             }
         }

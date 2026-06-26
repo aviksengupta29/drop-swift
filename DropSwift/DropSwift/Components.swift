@@ -117,7 +117,7 @@ struct EmptyState: View {
 
             if let actionTitle, let action {
                 PrimaryButton(title: actionTitle, action: action)
-                    .fixedSize()
+                    .frame(maxWidth: 260)
                     .padding(.top, Space.s)
             }
         }
