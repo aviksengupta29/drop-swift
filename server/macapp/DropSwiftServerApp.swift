@@ -2,43 +2,130 @@
 //  DropSwiftServerApp.swift
 //  Native macOS front-end for the DropSwift server.
 //
-//  Shows a Liquid-Glass UI with the logo, the Mac's IP/port, and a folder
-//  picker. It runs the bundled Python server (server.py) as a subprocess so
-//  the phone app keeps auto-discovering this Mac over the local network.
+//  A premium, Apple-grade UI (matching the iOS app): purple accent, gradient
+//  highlights, floating cards and a hero access code. It runs the bundled
+//  Python server (server.py) as a subprocess so the phone app keeps
+//  auto-discovering this Mac over the local network.
 //
 
 import SwiftUI
 import AppKit
 import Darwin
 
-// MARK: - Liquid Glass theme (matches the iOS app)
+// MARK: - Design system (matches the iOS app)
 
-enum Theme {
-    static let accent = Color(red: 0.42, green: 0.28, blue: 1.0)
-    static let green  = Color(red: 0.18, green: 0.80, blue: 0.42)
-    static let red    = Color(red: 0.95, green: 0.27, blue: 0.32)
-}
-
-extension View {
-    func glass<S: Shape>(_ shape: S) -> some View {
-        glassEffect(.regular, in: shape)
+extension Color {
+    init(hex: UInt32) {
+        self.init(.sRGB,
+                  red: Double((hex >> 16) & 0xFF) / 255,
+                  green: Double((hex >> 8) & 0xFF) / 255,
+                  blue: Double(hex & 0xFF) / 255,
+                  opacity: 1)
     }
 }
 
-/// Minimal backdrop: window background + a soft accent glow.
-struct GlassBackground: View {
+enum Theme {
+    static let accent  = Color(hex: 0x6E4BFF)
+    static let success = Color(hex: 0x30D158)
+    static let warning = Color(hex: 0xFF9F0A)
+    static let error   = Color(hex: 0xFF5247)
+    static let green   = success      // back-compat
+    static let red     = error
+
+    static var accentGradient: LinearGradient {
+        LinearGradient(colors: [Color(hex: 0x835CFF), Color(hex: 0x6E4BFF)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+}
+
+/// Soft, layered backdrop with accent glows.
+struct AppBackground: View {
     @Environment(\.colorScheme) private var scheme
     var body: some View {
         ZStack {
-            Color(nsColor: .windowBackgroundColor)
-            Circle()
-                .fill(Theme.accent)
-                .frame(width: 420, height: 420)
-                .blur(radius: 140)
-                .opacity(scheme == .dark ? 0.40 : 0.16)
-                .offset(x: 130, y: -240)
+            (scheme == .dark ? Color(hex: 0x0C0C10) : Color(hex: 0xF6F5FB))
+            Circle().fill(Theme.accent)
+                .frame(width: 440, height: 440).blur(radius: 165)
+                .opacity(scheme == .dark ? 0.38 : 0.16)
+                .offset(x: -150, y: -270)
+            Circle().fill(Color(hex: 0x59C2FF))
+                .frame(width: 360, height: 360).blur(radius: 185)
+                .opacity(scheme == .dark ? 0.16 : 0.08)
+                .offset(x: 170, y: 320)
         }
         .ignoresSafeArea()
+    }
+}
+
+struct CardModifier: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    var padding: CGFloat
+    var radius: CGFloat
+    func body(content: Content) -> some View {
+        content
+            .padding(padding)
+            .background(scheme == .dark ? Color(hex: 0x18181E) : Color.white,
+                        in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .strokeBorder(Color.primary.opacity(scheme == .dark ? 0.07 : 0.05), lineWidth: 1))
+            .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.08), radius: 18, x: 0, y: 10)
+    }
+}
+
+extension View {
+    func card(padding: CGFloat = 18, radius: CGFloat = 22) -> some View {
+        modifier(CardModifier(padding: padding, radius: radius))
+    }
+}
+
+struct PressStyle: ButtonStyle {
+    var scale: CGFloat = 0.97
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? scale : 1)
+            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
+
+/// Filled (gradient/colour) call-to-action button.
+struct FillButton: View {
+    let title: String
+    var icon: String? = nil
+    var fill: AnyShapeStyle
+    var glow: Color = .clear
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if let icon { Image(systemName: icon).font(.system(size: 14, weight: .semibold)) }
+                Text(title).font(.system(size: 14, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity).frame(height: 46)
+            .background(fill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: glow.opacity(0.4), radius: 12, y: 5)
+        }
+        .buttonStyle(PressStyle())
+    }
+}
+
+/// Tinted, low-emphasis button.
+struct TintButton: View {
+    let title: String
+    var icon: String? = nil
+    var tint: Color = Theme.accent
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if let icon { Image(systemName: icon).font(.system(size: 14, weight: .semibold)) }
+                Text(title).font(.system(size: 14, weight: .semibold))
+            }
+            .foregroundStyle(tint)
+            .frame(maxWidth: .infinity).frame(height: 46)
+            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(PressStyle())
     }
 }
 
@@ -189,52 +276,52 @@ final class ServerController: ObservableObject {
     }
 }
 
-// MARK: - Main view (Material 3 — matches the iOS app)
+// MARK: - Main view
 
 struct ServerView: View {
     @EnvironmentObject var server: ServerController
+    @State private var float = false
 
     var body: some View {
         ZStack {
-            GlassBackground()
+            AppBackground()
 
             VStack(spacing: 18) {
+                // Hero
                 logo
-                Text("DropSwift Server")
-                    .font(.system(size: 25, weight: .bold))
-                Text("Sharing files over your local Wi‑Fi")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .offset(y: float ? -4 : 4)
+                    .animation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true), value: float)
+                VStack(spacing: 3) {
+                    Text("DropSwift Server")
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                    Text("Share files over your local Wi‑Fi")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
 
                 MacStatusPill(running: server.isRunning)
+
+                accessCard
                 infoCard
 
                 HStack(spacing: 12) {
-                    Button(action: server.chooseFolder) {
-                        Label("Choose Folder", systemImage: "folder")
-                            .frame(maxWidth: .infinity).padding(.vertical, 6)
+                    TintButton(title: "Choose Folder", icon: "folder") { server.chooseFolder() }
+                    if server.isRunning {
+                        FillButton(title: "Stop", icon: "stop.fill",
+                                   fill: AnyShapeStyle(Theme.error), glow: Theme.error) { server.stop() }
+                    } else {
+                        FillButton(title: "Start", icon: "play.fill",
+                                   fill: AnyShapeStyle(Theme.accentGradient), glow: Theme.accent) { server.start() }
                     }
-                    .buttonStyle(.glass)
-                    .tint(Theme.accent)
-
-                    Button { server.isRunning ? server.stop() : server.start() } label: {
-                        Label(server.isRunning ? "Stop" : "Start",
-                              systemImage: server.isRunning ? "stop.fill" : "play.fill")
-                            .frame(maxWidth: .infinity).padding(.vertical, 6)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .tint(server.isRunning ? Theme.red : Theme.accent)
                 }
 
                 Text("Open DropSwift on your phone — it finds this Mac automatically.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .padding(.top, 2)
             }
             .padding(28)
         }
-        .frame(width: 420, height: 600)
+        .frame(width: 440)
+        .onAppear { float = true }
     }
 
     private var logo: some View {
@@ -246,82 +333,91 @@ struct ServerView: View {
                 Image(systemName: "arrow.left.arrow.right.circle.fill").resizable()
             }
         }
-        .frame(width: 92, height: 92)
+        .frame(width: 88, height: 88)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .shadow(color: Theme.accent.opacity(0.35), radius: 14, y: 6)
+        .shadow(color: Theme.accent.opacity(0.45), radius: 20, y: 12)
+    }
+
+    /// Hero access-code card.
+    private var accessCard: some View {
+        VStack(spacing: 8) {
+            Text("ACCESS CODE")
+                .font(.system(size: 11, weight: .semibold)).tracking(2)
+                .foregroundStyle(.secondary)
+            Text(server.code)
+                .font(.system(size: 40, weight: .bold, design: .rounded))
+                .tracking(8)
+                .foregroundStyle(Theme.accentGradient)
+            Button { server.regenerateCode() } label: {
+                Label("New code", systemImage: "arrow.clockwise")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(PressStyle())
+            .foregroundStyle(Theme.accent)
+            .help("Generate a new code")
+            Text("Enter this in the app the first time you connect")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .card(padding: 20)
     }
 
     private var infoCard: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Access code").foregroundStyle(.secondary)
-                Spacer()
-                Text(server.code)
-                    .font(.system(size: 22, weight: .bold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.accent)
-                Button { server.regenerateCode() } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Generate a new code")
-            }
-            .font(.callout)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 11)
-            Divider()
-            row("IP Address", server.ip)
-            Divider()
-            row("Port", String(server.port))
-            Divider()
-            row("Saving to", server.folder.path)
+            infoRow("network", "IP Address", server.ip)
+            divider
+            infoRow("number.circle", "Port", String(server.port))
+            divider
+            infoRow("folder", "Saving to", server.folder.path)
         }
-        .padding(.vertical, 6)
-        .glass(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .card(padding: 6)
     }
 
-    private func row(_ label: String, _ value: String) -> some View {
-        HStack {
+    private var divider: some View { Divider().opacity(0.5).padding(.horizontal, 14) }
+
+    private func infoRow(_ icon: String, _ label: String, _ value: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon).font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Theme.accent).frame(width: 20)
             Text(label).foregroundStyle(.secondary)
             Spacer()
-            Text(value)
+            Text(value).fontWeight(.medium)
                 .lineLimit(1).truncationMode(.middle)
-                .frame(maxWidth: 220, alignment: .trailing)
+                .frame(maxWidth: 210, alignment: .trailing)
         }
-        .font(.callout)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 11)
+        .font(.system(size: 13))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 }
 
-/// Status pill (glass), isolated so its animation never re-renders the rest of
-/// the UI. Steady green when running; flashing red glow when stopped.
+/// Status pill matching the iOS connected indicator. Steady when running, with a
+/// gentle glowing dot; muted red when stopped.
 struct MacStatusPill: View {
     let running: Bool
     @State private var pulse = false
 
     var body: some View {
-        let color = running ? Theme.green : Theme.red
+        let color = running ? Theme.success : Theme.error
         return HStack(spacing: 9) {
             Circle().fill(color).frame(width: 9, height: 9)
+                .shadow(color: color.opacity(0.9), radius: pulse ? 6 : 1)
             Text(running ? "Running" : "Stopped")
                 .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(color)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 48)
-        .glass(Capsule())
-        .overlay(Capsule().strokeBorder(color, lineWidth: 1.6))
-        .shadow(color: running ? Theme.green.opacity(0.45) : Theme.red.opacity(pulse ? 0.9 : 0.2),
-                radius: running ? 7 : (pulse ? 16 : 4))
+        .frame(height: 46)
+        .background(color.opacity(0.12), in: Capsule())
+        .overlay(Capsule().strokeBorder(color.opacity(0.35), lineWidth: 1))
         .onAppear { update() }
         .onChange(of: running) { _, _ in update() }
     }
 
     private func update() {
+        pulse = false
         if running {
-            withAnimation(.easeInOut(duration: 0.3)) { pulse = false }
-        } else {
-            pulse = false
-            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { pulse = true }
+            withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) { pulse = true }
         }
     }
 }
