@@ -10,19 +10,25 @@ import SwiftUI
 
 struct BrowseView: View {
     @EnvironmentObject var server: ServerConnection
+    var goToConnect: () -> Void = {}
 
     var body: some View {
         NavigationStack {
-            if server.isConnected {
-                GalleryView(path: "",
-                            title: server.serverName.isEmpty ? "Browse" : server.serverName)
-            } else {
-                ContentUnavailableView(
-                    "Not connected",
-                    systemImage: "wifi.slash",
-                    description: Text("Connect to your computer on the Connect tab first.")
-                )
-                .navigationTitle("Browse")
+            ZStack {
+                AppBackground()
+                if server.isConnected {
+                    GalleryView(path: "",
+                                title: server.serverName.isEmpty ? "Browse" : server.serverName)
+                } else {
+                    EmptyState(
+                        icon: "wifi.slash",
+                        title: "Not connected",
+                        message: "Connect to your computer first to browse and open the files you've sent.",
+                        actionTitle: "Go to Connect",
+                        action: goToConnect
+                    )
+                    .navigationTitle("Browse")
+                }
             }
         }
     }
@@ -62,6 +68,14 @@ struct GalleryView: View {
             if let error {
                 Text(error).foregroundStyle(Theme.red).padding()
             }
+            if items.isEmpty && !loading {
+                EmptyState(
+                    icon: "tray",
+                    title: "Empty folder",
+                    message: "Files you send from your phone will appear here."
+                )
+                .padding(.top, 80)
+            }
             LazyVGrid(columns: columns, spacing: 2) {
                 ForEach(folders) { folder in
                     NavigationLink {
@@ -79,11 +93,8 @@ struct GalleryView: View {
                 }
             }
             .padding(.bottom, 130)
-
-            if items.isEmpty && !loading {
-                ContentUnavailableView("Empty folder", systemImage: "tray").padding(.top, 60)
-            }
         }
+        .scrollIndicators(.hidden)
         .overlay { if loading && items.isEmpty { ProgressView() } }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
