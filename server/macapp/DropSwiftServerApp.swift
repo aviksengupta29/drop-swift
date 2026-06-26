@@ -100,6 +100,7 @@ final class ServerController: ObservableObject {
             try task.run()
             process = task
             isRunning = true
+            preventSleep()
         } catch {
             isRunning = false
         }
@@ -110,6 +111,25 @@ final class ServerController: ObservableObject {
         process = nil
         killStray()
         isRunning = false
+        allowSleep()
+    }
+
+    // Keep the Mac awake while the server runs, so long (overnight) transfers
+    // don't drop when the system would otherwise idle-sleep.
+    private var sleepActivity: NSObjectProtocol?
+
+    private func preventSleep() {
+        guard sleepActivity == nil else { return }
+        sleepActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.idleSystemSleepDisabled, .userInitiated],
+            reason: "DropSwift server is running")
+    }
+
+    private func allowSleep() {
+        if let sleepActivity {
+            ProcessInfo.processInfo.endActivity(sleepActivity)
+            self.sleepActivity = nil
+        }
     }
 
     /// Kills any DropSwift server / Bonjour advertiser left running, so we never

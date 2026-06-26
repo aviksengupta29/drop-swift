@@ -512,7 +512,6 @@ final class ServerConnection: ObservableObject {
         transferCompleted = 0
         activeFractions = [:]
         transferResult = nil
-        var failures = 0
 
         // Keep the screen awake and take a short background grace window so the
         // transfer isn't interrupted by screen sleep or brief backgrounding.
@@ -544,27 +543,23 @@ final class ServerConnection: ObservableObject {
 
         let stamp = Int(Date().timeIntervalSince1970)
 
-        // Bounded-concurrency queue: only `maxParallelUploads` items are exported
-        // to temp + uploading at once, so disk/memory stay flat no matter how many
-        // thousands of items are selected. Refills as each finishes.
-        await withTaskGroup(of: Bool.self) { group in
-            var next = 0
-            let limit = min(Self.maxParallelUploads, items.count)
-            while next < limit {
-                let i = next
-                group.addTask { [weak self] in await self?.uploadOne(items[i], index: i, stamp: stamp) ?? false }
-                next += 1
-            }
-            while let ok = await group.next() {
-                if !ok && !Task.isCancelled { failures += 1 }
-                if next < items.count && !Task.isCancelled {
-                    let i = next
-                    group.addTask { [weak self] in await self?.uploadOne(items[i], index: i, stamp: stamp) ?? false }
-                    next += 1
-                }
-            }
+        // Process the whole batch, then retry any failures in extra passes with
+        // growing waits — so a transient drop (Wi‑Fi blip, the Mac briefly busy,
+        // a momentary server hiccup) recovers instead of losing files over a
+        // long transfer.
+        var pending: [(Int, PhotosPickerItem)] = items.enumerated().map { ($0.offset, $0.element) }
+        var pass = 0
+        let maxPasses = 6
+        while !pending.isEmpty && !Task.isCancelled {
+            pass += 1
+            pending = await runUploadPass(pending, stamp: stamp)
+            guard !pending.isEmpty, !Task.isCancelled, pass < maxPasses else { break }
+            let delay = Double(min(120, pass * 20))   // 20s, 40s, … up to 2 min
+            transferCurrentName = "Waiting to retry \(pending.count) item(s)…"
+            try? await Task.sleep(for: .seconds(delay))
         }
 
+        let failures = pending.count
         isTransferring = false
         activeFractions = [:]
         if Task.isCancelled {
@@ -574,6 +569,31 @@ final class ServerConnection: ObservableObject {
                 ? "Sent \(transferCompleted) item(s) to \(serverName)."
                 : "Sent \(transferCompleted), failed \(failures). Check the connection and try again."
         }
+    }
+
+    /// Uploads a batch of (index, item) with bounded concurrency; returns the
+    /// items that failed so a later pass can retry them. Only `maxParallelUploads`
+    /// items are exported-to-temp + uploading at once, so disk/memory stay flat
+    /// no matter how many thousands are selected.
+    private func runUploadPass(_ batch: [(Int, PhotosPickerItem)], stamp: Int) async -> [(Int, PhotosPickerItem)] {
+        var failed: [(Int, PhotosPickerItem)] = []
+        await withTaskGroup(of: (Int, PhotosPickerItem, Bool).self) { group in
+            var next = 0
+            let limit = min(Self.maxParallelUploads, batch.count)
+            func add(_ k: Int) {
+                let (idx, item) = batch[k]
+                group.addTask { [weak self] in
+                    let ok = await self?.uploadOne(item, index: idx, stamp: stamp) ?? false
+                    return (idx, item, ok)
+                }
+            }
+            while next < limit { add(next); next += 1 }
+            while let (idx, item, ok) = await group.next() {
+                if !ok && !Task.isCancelled { failed.append((idx, item)) }
+                if next < batch.count && !Task.isCancelled { add(next); next += 1 }
+            }
+        }
+        return failed
     }
 
     /// Exports one item to a temp file (original + metadata, or fallback) and
