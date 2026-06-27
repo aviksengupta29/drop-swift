@@ -28,12 +28,14 @@ struct UploadView: View {
                             uploadArea
                             if !selection.isEmpty { readyCard }
                             if let result = server.transferResult { resultCard(result) }
+                            if !server.failedItems.isEmpty { retryCard }
                         }
                     }
                     .padding(.horizontal, Space.l)
                     .padding(.bottom, 130)
                     .animation(.spring(response: 0.5, dampingFraction: 0.85), value: server.isTransferring)
                     .animation(.spring(response: 0.5, dampingFraction: 0.85), value: selection.isEmpty)
+                    .animation(.spring(response: 0.5, dampingFraction: 0.85), value: server.failedItems.count)
                 }
                 .scrollIndicators(.hidden)
             } else {
@@ -214,14 +216,44 @@ struct UploadView: View {
     // MARK: Result
 
     private func resultCard(_ result: String) -> some View {
-        HStack(spacing: Space.m) {
-            Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 30)).foregroundStyle(Theme.success)
+        let ok = server.failedItems.isEmpty
+        return HStack(spacing: Space.m) {
+            Image(systemName: ok ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 30)).foregroundStyle(ok ? Theme.success : Theme.warning)
                 .symbolEffect(.bounce, value: result)
             Text(result).font(.system(size: 15, weight: .medium))
             Spacer(minLength: 0)
         }
         .appCard(padding: Space.m)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    // MARK: Retry
+
+    private var retryCard: some View {
+        VStack(spacing: Space.m) {
+            HStack(spacing: Space.m) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Theme.warning.opacity(0.15)).frame(width: 48, height: 48)
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 20, weight: .semibold)).foregroundStyle(Theme.warning)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(server.failedItems.count) item\(server.failedItems.count == 1 ? "" : "s") didn't send")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("Resume from where it stopped")
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            PrimaryButton(title: "Retry \(server.failedItems.count) item\(server.failedItems.count == 1 ? "" : "s")",
+                          icon: "arrow.clockwise") {
+                let items = server.failedItems
+                sendTask = Task { await server.sendPhotos(items) }
+            }
+        }
+        .appCard()
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }

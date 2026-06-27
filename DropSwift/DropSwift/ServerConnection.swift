@@ -139,6 +139,7 @@ final class ServerConnection: ObservableObject {
     @Published var transferResult: String?
     @Published var transferSpeed: Double = 0      // bytes/sec (Send UI + Live Activity)
     @Published var transferETADate: Date?         // projected completion time
+    @Published var failedItems: [PhotosPickerItem] = []   // items left to retry
 
     /// How many uploads run at once — overlaps photo-library export with network
     /// transfer and uses several streams (like a download manager).
@@ -575,6 +576,7 @@ final class ServerConnection: ObservableObject {
         transferCompleted = 0
         activeFractions = [:]
         transferResult = nil
+        failedItems = []
         resetTransferMetrics()
 
         // Keep the screen awake and take a short background grace window so the
@@ -626,12 +628,13 @@ final class ServerConnection: ObservableObject {
         let failures = pending.count
         isTransferring = false
         activeFractions = [:]
+        failedItems = pending.map { $0.1 }   // remember what didn't send, for Retry
         if Task.isCancelled {
             transferResult = "Stopped. Sent \(transferCompleted) of \(transferTotal)."
         } else {
             transferResult = failures == 0
                 ? "Sent \(transferCompleted) item(s) to \(serverName)."
-                : "Sent \(transferCompleted), failed \(failures). Check the connection and try again."
+                : "Sent \(transferCompleted), failed \(failures)."
         }
     }
 
@@ -653,9 +656,11 @@ final class ServerConnection: ObservableObject {
             }
             while next < limit { add(next); next += 1 }
             while let (idx, item, ok) = await group.next() {
-                if !ok && !Task.isCancelled { failed.append((idx, item)) }
+                if !ok { failed.append((idx, item)) }
                 if next < batch.count && !Task.isCancelled { add(next); next += 1 }
             }
+            // Items never started (e.g. after a cancel) are still pending.
+            while next < batch.count { failed.append(batch[next]); next += 1 }
         }
         return failed
     }
@@ -668,17 +673,24 @@ final class ServerConnection: ObservableObject {
 
         let fileURL: URL
         let name: String
-        if let (tmp, original) = await Self.writeOriginalToTemp(for: item) {
-            fileURL = tmp
-            name = original
-        } else if let data = try? await item.loadTransferable(type: Data.self) {
-            let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "dat"
-            name = "DropSwift_\(stamp)_\(index).\(ext)"
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString + "-" + name)
-            guard (try? data.write(to: tmp)) != nil else { activeFractions[index] = nil; return false }
-            fileURL = tmp
-        } else {
+        do {
+            if let (tmp, original) = try await Self.writeOriginalToTemp(for: item) {
+                fileURL = tmp
+                name = original
+            } else if let data = try? await item.loadTransferable(type: Data.self), !Task.isCancelled {
+                let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "dat"
+                name = "DropSwift_\(stamp)_\(index).\(ext)"
+                let tmp = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString + "-" + name)
+                guard (try? data.write(to: tmp)) != nil else { activeFractions[index] = nil; return false }
+                fileURL = tmp
+            } else {
+                activeFractions[index] = nil
+                return false
+            }
+        } catch {
+            // Export stalled (e.g. an iCloud item that won't download) or was
+            // cancelled — fail this file so the queue keeps moving; retry later.
             activeFractions[index] = nil
             return false
         }
@@ -707,11 +719,16 @@ final class ServerConnection: ObservableObject {
 
     /// Writes a picked item's ORIGINAL resource to a temp file on disk, streaming
     /// (low memory). Returns the temp URL + the original filename.
-    nonisolated private static func writeOriginalToTemp(for item: PhotosPickerItem) async -> (URL, String)? {
-        guard let id = item.itemIdentifier else { return nil }
-        let assets = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
-        guard let asset = assets.firstObject else { return nil }
-
+    /// Returns nil if the item has no backing photo-library asset (caller falls
+    /// back to the picker's transferable). THROWS if the export stalls (e.g. an
+    /// iCloud item that won't download) or is cancelled — so one stuck file can
+    /// never freeze the whole queue, and Cancel always works.
+    nonisolated private static func writeOriginalToTemp(for item: PhotosPickerItem,
+                                                        stallSeconds: TimeInterval = 45) async throws -> (URL, String)? {
+        guard let id = item.itemIdentifier,
+              let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject else {
+            return nil
+        }
         let resources = PHAssetResource.assetResources(for: asset)
         let preferred: PHAssetResourceType = asset.mediaType == .video ? .video : .photo
         guard let resource = resources.first(where: { $0.type == preferred }) ?? resources.first else {
@@ -721,20 +738,63 @@ final class ServerConnection: ObservableObject {
         let name = resource.originalFilename
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + "-" + name)
+        FileManager.default.createFile(atPath: tempURL.path, contents: nil)
+        guard let handle = try? FileHandle(forWritingTo: tempURL) else {
+            try? FileManager.default.removeItem(at: tempURL)
+            return nil
+        }
 
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true   // allow fetching from iCloud
 
-        do {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                PHAssetResourceManager.default().writeData(for: resource, toFile: tempURL, options: options) { error in
-                    if let error { cont.resume(throwing: error) } else { cont.resume() }
+        let manager = PHAssetResourceManager.default()
+        let state = ExportState()
+
+        // Watchdog: if no bytes arrive for `stallSeconds`, abandon this file so the
+        // queue keeps moving (it's retried later). Lets big-but-progressing
+        // downloads continue, while breaking true hangs.
+        let watchdog = Task.detached {
+            while true {
+                try? await Task.sleep(for: .seconds(5))
+                if Task.isCancelled || state.isResumed { break }
+                if state.secondsSinceProgress() > stallSeconds {
+                    manager.cancelDataRequest(state.requestID)
+                    state.resume(.failure(StallError()))
+                    break
                 }
             }
+        }
+
+        do {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                    state.attach(cont)
+                    let rid = manager.requestData(for: resource, options: options,
+                        dataReceivedHandler: { chunk in
+                            try? handle.write(contentsOf: chunk)
+                            state.touch()
+                        },
+                        completionHandler: { error in
+                            if let error { state.resume(.failure(error)) } else { state.resume(.success(())) }
+                        })
+                    state.requestID = rid
+                    if Task.isCancelled {
+                        manager.cancelDataRequest(rid)
+                        state.resume(.failure(CancellationError()))
+                    }
+                }
+            } onCancel: {
+                manager.cancelDataRequest(state.requestID)
+                state.resume(.failure(CancellationError()))
+            }
+            watchdog.cancel()
+            try? handle.close()
             return (tempURL, name)
         } catch {
+            watchdog.cancel()
+            try? handle.close()
             try? FileManager.default.removeItem(at: tempURL)
-            return nil
+            throw error
         }
     }
 
@@ -767,6 +827,42 @@ final class ServerConnection: ObservableObject {
 }
 
 /// Reports upload byte-progress for the progress bar.
+private struct StallError: Error {}
+
+/// Thread-safe coordinator for a cancellable, stall-protected PhotoKit export.
+/// Guarantees the continuation is resumed exactly once (by whichever of the
+/// completion handler, the cancellation handler, or the watchdog fires first).
+private final class ExportState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _requestID: PHAssetResourceDataRequestID = 0
+    private var _lastProgress = Date()
+    private var _resumed = false
+    private var _cont: CheckedContinuation<Void, Error>?
+
+    var requestID: PHAssetResourceDataRequestID {
+        get { lock.lock(); defer { lock.unlock() }; return _requestID }
+        set { lock.lock(); _requestID = newValue; lock.unlock() }
+    }
+    var isResumed: Bool { lock.lock(); defer { lock.unlock() }; return _resumed }
+
+    func attach(_ cont: CheckedContinuation<Void, Error>) { lock.lock(); _cont = cont; lock.unlock() }
+    func touch() { lock.lock(); _lastProgress = Date(); lock.unlock() }
+    func secondsSinceProgress() -> TimeInterval {
+        lock.lock(); defer { lock.unlock() }; return Date().timeIntervalSince(_lastProgress)
+    }
+    func resume(_ result: Result<Void, Error>) {
+        lock.lock()
+        if _resumed { lock.unlock(); return }
+        _resumed = true
+        let c = _cont; _cont = nil
+        lock.unlock()
+        switch result {
+        case .success: c?.resume()
+        case .failure(let e): c?.resume(throwing: e)
+        }
+    }
+}
+
 final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let onProgress: @Sendable (Double) -> Void
     private let onBytes: @Sendable (Int64) -> Void
