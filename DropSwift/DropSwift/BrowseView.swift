@@ -115,6 +115,7 @@ struct GalleryView: View {
     }
 
     private func tap(_ file: RemoteFile) {
+        Haptics.light()
         let p = childPath(file.name)
         if MediaKind.of(file.name) == .other {
             Task {

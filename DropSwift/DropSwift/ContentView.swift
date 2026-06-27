@@ -44,6 +44,12 @@ struct ContentView: View {
             }
         }
         .onChange(of: tab) { _, _ in Haptics.selection() }
+        .onChange(of: server.isConnected) { _, connected in
+            if connected { Haptics.success() }
+        }
+        .onChange(of: server.didDisconnectUnexpectedly) { _, disconnected in
+            if disconnected { Haptics.warning() }
+        }
     }
 
     private func goToConnect() {

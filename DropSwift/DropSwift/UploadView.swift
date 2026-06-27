@@ -53,6 +53,9 @@ struct UploadView: View {
         .onChange(of: server.transferResult) { _, new in
             if new != nil { Haptics.success() }
         }
+        .onChange(of: selection.count) { old, new in
+            if new > old { Haptics.soft() }   // photos picked
+        }
     }
 
     // MARK: Header
