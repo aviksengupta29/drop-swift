@@ -36,14 +36,14 @@ struct ContentView: View {
         .sheet(isPresented: $server.needsCode) {
             CodeEntryView().environmentObject(server)
         }
-        .onAppear { server.startDiscovery() }
+        .onAppear { server.startDiscovery(); Haptics.warmUp() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 server.startDiscovery()   // re-arm browser after backgrounding / permission grant
                 Task { await server.checkNow() }
             }
         }
-        .onChange(of: tab) { _, _ in Haptics.selection() }
+        .onChange(of: tab) { _, _ in Haptics.rigid() }   // section switch — clearly felt
         .onChange(of: server.isConnected) { _, connected in
             if connected { Haptics.success() }
         }

@@ -53,7 +53,6 @@ struct FloatingTabBar: View {
         let active = selection == tab
         return Button {
             guard selection != tab else { return }
-            Haptics.soft()
             withAnimation(.spring(response: 0.42, dampingFraction: 0.74)) { selection = tab }
         } label: {
             HStack(spacing: 7) {

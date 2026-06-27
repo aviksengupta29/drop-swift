@@ -52,14 +52,31 @@ enum Radius {
     static let pill: CGFloat = 999
 }
 
-/// Haptic feedback helpers.
+/// Haptic feedback. Generators are kept alive and pre-warmed — a fresh,
+/// unprepared generator fires weakly or gets dropped, which feels like "no
+/// haptics". Must be used on the main thread (hence @MainActor).
+@MainActor
 enum Haptics {
-    static func light()  { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-    static func soft()   { UIImpactFeedbackGenerator(style: .soft).impactOccurred() }
-    static func rigid()  { UIImpactFeedbackGenerator(style: .rigid).impactOccurred() }
-    static func selection() { UISelectionFeedbackGenerator().selectionChanged() }
-    static func success() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
-    static func warning() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+    private static let lightGen     = UIImpactFeedbackGenerator(style: .light)
+    private static let softGen      = UIImpactFeedbackGenerator(style: .soft)
+    private static let mediumGen    = UIImpactFeedbackGenerator(style: .medium)
+    private static let rigidGen     = UIImpactFeedbackGenerator(style: .rigid)
+    private static let selectionGen = UISelectionFeedbackGenerator()
+    private static let notifyGen    = UINotificationFeedbackGenerator()
+
+    static func light()  { lightGen.impactOccurred(intensity: 1);  lightGen.prepare() }
+    static func soft()   { softGen.impactOccurred(intensity: 1);   softGen.prepare() }
+    static func medium() { mediumGen.impactOccurred(intensity: 1); mediumGen.prepare() }
+    static func rigid()  { rigidGen.impactOccurred(intensity: 1);  rigidGen.prepare() }
+    static func selection() { selectionGen.selectionChanged(); selectionGen.prepare() }
+    static func success() { notifyGen.notificationOccurred(.success); notifyGen.prepare() }
+    static func warning() { notifyGen.notificationOccurred(.warning); notifyGen.prepare() }
+
+    /// Pre-warm the Taptic Engine so the first taps are crisp (call on launch).
+    static func warmUp() {
+        lightGen.prepare(); mediumGen.prepare(); rigidGen.prepare()
+        selectionGen.prepare(); notifyGen.prepare()
+    }
 }
 
 // MARK: - Background
@@ -137,7 +154,7 @@ struct PrimaryButton: View {
 
     var body: some View {
         Button {
-            Haptics.light()
+            Haptics.medium()
             action()
         } label: {
             HStack(spacing: Space.s) {
@@ -169,7 +186,7 @@ struct SecondaryButton: View {
 
     var body: some View {
         Button {
-            Haptics.light()
+            Haptics.medium()
             action()
         } label: {
             HStack(spacing: Space.s) {

@@ -259,7 +259,7 @@ struct ComputerCard: View {
 
     var body: some View {
         Button {
-            Haptics.light()
+            Haptics.medium()
             action()
         } label: {
             HStack(spacing: Space.m) {
