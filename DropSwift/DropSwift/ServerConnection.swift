@@ -472,6 +472,24 @@ final class ServerConnection: ObservableObject {
 
     private var liveActivity: Activity<TransferActivityAttributes>?
 
+    // Live speed / ETA tracking for the Dynamic Island + Live Activity.
+    private var bytesSent: Int64 = 0
+    private var transferStart: Date?
+    private var speedSampleBytes: Int64 = 0
+    private var speedSampleDate: Date?
+    private var smoothedSpeed: Double = 0
+    private var lastHapticBucket = 0
+
+    /// Resets the speed/ETA accumulators at the start of a transfer.
+    private func resetTransferMetrics() {
+        bytesSent = 0
+        transferStart = Date()
+        speedSampleBytes = 0
+        speedSampleDate = nil
+        smoothedSpeed = 0
+        lastHapticBucket = 0
+    }
+
     private func startLiveActivity(total: Int) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let attributes = TransferActivityAttributes(serverName: serverName)
@@ -483,10 +501,45 @@ final class ServerConnection: ObservableObject {
     }
 
     private func updateLiveActivity() {
+        let now = Date()
+
+        // Smoothed transfer speed (EMA over ~0.5s samples).
+        if let last = speedSampleDate {
+            let dt = now.timeIntervalSince(last)
+            if dt >= 0.5 {
+                let inst = Double(bytesSent - speedSampleBytes) / dt
+                smoothedSpeed = smoothedSpeed == 0 ? inst : smoothedSpeed * 0.6 + inst * 0.4
+                speedSampleDate = now
+                speedSampleBytes = bytesSent
+            }
+        } else {
+            speedSampleDate = now
+            speedSampleBytes = bytesSent
+        }
+
+        // Projected completion time (from elapsed time + overall progress).
+        var etaDate: Date?
+        let f = transferOverall
+        if let start = transferStart, f > 0.02 {
+            let elapsed = now.timeIntervalSince(start)
+            let remaining = elapsed * (1 - f) / f
+            if remaining.isFinite, remaining > 1, remaining < 86_400 {
+                etaDate = now.addingTimeInterval(remaining)
+            }
+        }
+
+        // Milestone haptics (play when foregrounded — screen stays awake mid-transfer).
+        let bucket = Int(f * 4)
+        if bucket > lastHapticBucket, bucket < 4 {
+            lastHapticBucket = bucket
+            Haptics.light()
+        }
+
         guard let liveActivity else { return }
         let state = TransferActivityAttributes.ContentState(
             completed: transferCompleted, total: transferTotal,
-            fraction: transferOverall, currentName: transferCurrentName, done: false)
+            fraction: f, currentName: transferCurrentName, done: false,
+            speed: max(0, smoothedSpeed), etaDate: etaDate)
         Task { await liveActivity.update(ActivityContent(state: state, staleDate: nil)) }
     }
 
@@ -494,7 +547,7 @@ final class ServerConnection: ObservableObject {
         guard let liveActivity else { return }
         let state = TransferActivityAttributes.ContentState(
             completed: transferCompleted, total: transferTotal,
-            fraction: 1, currentName: "", done: true)
+            fraction: 1, currentName: "", done: true, speed: 0, etaDate: nil)
         let finished = liveActivity
         self.liveActivity = nil
         Task {
@@ -514,6 +567,7 @@ final class ServerConnection: ObservableObject {
         transferCompleted = 0
         activeFractions = [:]
         transferResult = nil
+        resetTransferMetrics()
 
         // Keep the screen awake and take a short background grace window so the
         // transfer isn't interrupted by screen sleep or brief backgrounding.
@@ -684,9 +738,11 @@ final class ServerConnection: ObservableObject {
         request.setValue(filename, forHTTPHeaderField: "X-Filename")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
-        let delegate = UploadProgressDelegate { [weak self] fraction in
+        let delegate = UploadProgressDelegate(onProgress: { [weak self] fraction in
             Task { @MainActor in self?.activeFractions[index] = fraction }
-        }
+        }, onBytes: { [weak self] delta in
+            Task { @MainActor in self?.bytesSent += delta }
+        })
         let (_, response) = try await session.upload(for: request, fromFile: fileURL, delegate: delegate)
         try Self.check(response)
     }
@@ -705,15 +761,19 @@ final class ServerConnection: ObservableObject {
 /// Reports upload byte-progress for the progress bar.
 final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let onProgress: @Sendable (Double) -> Void
+    private let onBytes: @Sendable (Int64) -> Void
 
-    init(onProgress: @escaping @Sendable (Double) -> Void) {
+    init(onProgress: @escaping @Sendable (Double) -> Void,
+         onBytes: @escaping @Sendable (Int64) -> Void = { _ in }) {
         self.onProgress = onProgress
+        self.onBytes = onBytes
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     didSendBodyData bytesSent: Int64,
                     totalBytesSent: Int64,
                     totalBytesExpectedToSend: Int64) {
+        onBytes(bytesSent)
         guard totalBytesExpectedToSend > 0 else { return }
         onProgress(min(1.0, Double(totalBytesSent) / Double(totalBytesExpectedToSend)))
     }
