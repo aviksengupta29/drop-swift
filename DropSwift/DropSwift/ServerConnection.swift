@@ -137,6 +137,8 @@ final class ServerConnection: ObservableObject {
     @Published var transferCurrentName = ""
     @Published var activeFractions: [Int: Double] = [:]   // in-flight per-file progress
     @Published var transferResult: String?
+    @Published var transferSpeed: Double = 0      // bytes/sec (Send UI + Live Activity)
+    @Published var transferETADate: Date?         // projected completion time
 
     /// How many uploads run at once — overlaps photo-library export with network
     /// transfer and uses several streams (like a download manager).
@@ -488,6 +490,8 @@ final class ServerConnection: ObservableObject {
         speedSampleDate = nil
         smoothedSpeed = 0
         lastHapticBucket = 0
+        transferSpeed = 0
+        transferETADate = nil
     }
 
     private func startLiveActivity(total: Int) {
@@ -527,6 +531,10 @@ final class ServerConnection: ObservableObject {
                 etaDate = now.addingTimeInterval(remaining)
             }
         }
+
+        // Publish for the in-app Send screen.
+        transferSpeed = max(0, smoothedSpeed)
+        transferETADate = etaDate
 
         // Milestone haptics (play when foregrounded — screen stays awake mid-transfer).
         let bucket = Int(f * 4)

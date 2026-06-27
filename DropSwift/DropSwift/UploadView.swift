@@ -156,11 +156,19 @@ struct UploadView: View {
                     .lineLimit(1).truncationMode(.middle)
             }
 
-            HStack(spacing: Space.l) {
-                stat("\(server.transferCompleted)", "Done")
-                Divider().frame(height: 28)
-                stat("\(max(0, server.transferTotal - server.transferCompleted))", "Left")
+            HStack(spacing: 0) {
+                metric(icon: "gauge.with.dots.needle.67percent", label: "Speed") {
+                    Text(speedText).contentTransition(.numericText())
+                }
+                metricDivider
+                metric(icon: "clock", label: "Time left") { etaValue }
+                metricDivider
+                metric(icon: "photo.stack", label: "Files") {
+                    Text("\(server.transferCompleted)/\(server.transferTotal)")
+                        .contentTransition(.numericText())
+                }
             }
+            .animation(.snappy, value: server.transferSpeed)
 
             SecondaryButton(title: "Cancel", icon: "xmark", tint: Theme.error) {
                 Haptics.warning()
@@ -171,12 +179,36 @@ struct UploadView: View {
         .transition(.scale(scale: 0.92).combined(with: .opacity))
     }
 
-    private func stat(_ value: String, _ label: String) -> some View {
-        VStack(spacing: 2) {
-            Text(value).font(.system(size: 22, weight: .bold, design: .rounded))
-                .contentTransition(.numericText())
-            Text(label).font(.system(size: 12)).foregroundStyle(.secondary)
+    private func metric<V: View>(icon: String, label: String,
+                                 @ViewBuilder value: () -> V) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon).font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+            value()
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+            Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var metricDivider: some View { Divider().frame(height: 36) }
+
+    @ViewBuilder private var etaValue: some View {
+        if let eta = server.transferETADate, eta > .now {
+            Text(timerInterval: Date.now...eta, countsDown: true)
+        } else {
+            Text("—")
+        }
+    }
+
+    private var speedText: String {
+        let bps = server.transferSpeed
+        guard bps > 1 else { return "—" }
+        let mb = bps / 1_000_000
+        if mb >= 1 { return String(format: "%.0f MB/s", mb) }
+        return String(format: "%.0f KB/s", bps / 1000)
     }
 
     // MARK: Result
