@@ -92,18 +92,31 @@ struct DropSwiftTransferLiveActivity: Widget {
             }
             .keylineTint(accent)
         }
+        // Show this Live Activity on the Apple Watch Smart Stack with a
+        // watch-tailored (.small) layout.
+        .supplementalActivityFamilies([.small])
     }
 }
 
-// MARK: - Lock Screen
+// MARK: - Lock Screen / Watch
 
 struct LockScreenView: View {
+    @Environment(\.activityFamily) private var activityFamily
     let context: ActivityViewContext<TransferActivityAttributes>
 
     var body: some View {
+        switch activityFamily {
+        case .small:
+            WatchTransferView(context: context)
+        default:
+            phoneBody
+        }
+    }
+
+    private var phoneBody: some View {
         let s = context.state
         let device = deviceName(context.attributes.serverName)
-        HStack(alignment: .center, spacing: 14) {
+        return HStack(alignment: .center, spacing: 14) {
             RingIcon(fraction: s.fraction, done: s.done, size: 50)
 
             VStack(alignment: .leading, spacing: 7) {
@@ -143,6 +156,44 @@ struct LockScreenView: View {
             }
         }
         .padding(16)
+    }
+}
+
+/// Apple Watch (Smart Stack) presentation — compact and glanceable.
+struct WatchTransferView: View {
+    let context: ActivityViewContext<TransferActivityAttributes>
+
+    var body: some View {
+        let s = context.state
+        let device = deviceName(context.attributes.serverName)
+        HStack(spacing: 10) {
+            RingIcon(fraction: s.fraction, done: s.done, size: 34)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(s.done ? "Sent" : "Sending")
+                        .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 2)
+                    PercentLabel(state: s, size: 15)
+                }
+                CapsuleProgress(fraction: s.fraction, done: s.done)
+                HStack(spacing: 6) {
+                    Text(device).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if !s.done, let eta = s.etaDate, eta > .now {
+                        Text(timerInterval: Date.now...eta, countsDown: true)
+                            .monospacedDigit()
+                            .frame(maxWidth: 46, alignment: .trailing)
+                    } else {
+                        Text("\(s.completed)/\(s.total)").monospacedDigit()
+                    }
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 }
 
