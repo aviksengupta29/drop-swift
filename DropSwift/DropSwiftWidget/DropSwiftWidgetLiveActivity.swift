@@ -79,6 +79,7 @@ struct DropSwiftTransferLiveActivity: Widget {
                         }
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)   // clear the island's rounded corners
                     }
                     .padding(.top, 3)
                 }
