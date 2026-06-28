@@ -41,6 +41,33 @@ ACCESS_CODE = None
 TOKENS = set()
 TOKENS_LOCK = threading.Lock()
 
+# Live transfer status — printed to stdout as structured lines that the macOS
+# DropSwift Server app reads to show a "Receiving files…" card.
+STATUS_LOCK = threading.Lock()
+STATUS_RECEIVED = 0
+STATUS_ACTIVE = 0
+STATUS_PREFIX = "@@DROPSWIFT_STATUS@@ "
+
+
+def emit_status(event: str, name: str = ""):
+    """event: 'start' | 'done' | 'fail'. Thread-safe; flushes immediately."""
+    global STATUS_RECEIVED, STATUS_ACTIVE
+    with STATUS_LOCK:
+        if event == "start":
+            STATUS_ACTIVE += 1
+        elif event == "done":
+            STATUS_ACTIVE = max(0, STATUS_ACTIVE - 1)
+            STATUS_RECEIVED += 1
+        elif event == "fail":
+            STATUS_ACTIVE = max(0, STATUS_ACTIVE - 1)
+        payload = {"event": event, "name": name,
+                   "active": STATUS_ACTIVE, "received": STATUS_RECEIVED}
+        try:
+            sys.stdout.write(STATUS_PREFIX + json.dumps(payload) + "\n")
+            sys.stdout.flush()
+        except Exception:
+            pass
+
 
 def new_code() -> str:
     return "".join(secrets.choice("0123456789") for _ in range(6))
@@ -314,6 +341,7 @@ class Handler(BaseHTTPRequestHandler):
 
         length = int(self.headers.get("Content-Length", 0))
         written = 0
+        emit_status("start", filename)
         # Stream straight to disk in 1 MB chunks — constant memory even for
         # multi-gigabyte files.
         try:
@@ -331,6 +359,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # If the upload was cancelled / interrupted, discard the partial file.
         if written != length:
+            emit_status("fail", filename)
             try:
                 os.remove(dest)
             except OSError:
@@ -341,6 +370,7 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             return
 
+        emit_status("done", os.path.basename(dest))
         self._send_json({"ok": True, "name": os.path.basename(dest), "bytes": written})
 
 

@@ -139,7 +139,14 @@ final class ServerController: ObservableObject {
     @Published var folder: URL
     @Published var code: String
 
+    // Live transfer status, fed by the server's stdout.
+    @Published var receiving = false
+    @Published var receivedCount = 0
+    @Published var lastFile = ""
+
     private var process: Process?
+    private var outPipe: Pipe?
+    private var outBuffer = ""
 
     init() {
         let saved = UserDefaults.standard.url(forKey: "dropswift.folder")
@@ -181,8 +188,19 @@ final class ServerController: ObservableObject {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: py)
         task.arguments = [script.path, "--dir", folder.path, "--port", String(port), "--code", code]
-        task.standardOutput = nil
+
+        // Read the server's stdout to surface live transfer status.
+        let pipe = Pipe()
+        task.standardOutput = pipe
         task.standardError = nil
+        outPipe = pipe
+        outBuffer = ""
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            Task { @MainActor in self?.ingest(data) }
+        }
+
         do {
             try task.run()
             process = task
@@ -194,11 +212,42 @@ final class ServerController: ObservableObject {
     }
 
     func stop() {
+        outPipe?.fileHandleForReading.readabilityHandler = nil
+        outPipe = nil
+        outBuffer = ""
         process?.terminate()
         process = nil
         killStray()
         isRunning = false
+        receiving = false
+        receivedCount = 0
+        lastFile = ""
         allowSleep()
+    }
+
+    // MARK: Live status parsing
+
+    private func ingest(_ data: Data) {
+        outBuffer += String(decoding: data, as: UTF8.self)
+        while let nl = outBuffer.firstIndex(of: "\n") {
+            let line = String(outBuffer[outBuffer.startIndex..<nl])
+            outBuffer.removeSubrange(outBuffer.startIndex...nl)
+            parseStatus(line)
+        }
+    }
+
+    private func parseStatus(_ line: String) {
+        let prefix = "@@DROPSWIFT_STATUS@@ "
+        guard line.hasPrefix(prefix) else { return }   // ignore ordinary log lines
+        let json = String(line.dropFirst(prefix.count))
+        guard let d = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+        let active = obj["active"] as? Int ?? 0
+        let received = obj["received"] as? Int ?? 0
+        let name = obj["name"] as? String ?? ""
+        receivedCount = received
+        if !name.isEmpty { lastFile = name }
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { receiving = active > 0 }
     }
 
     // Keep the Mac awake while the server runs, so long (overnight) transfers
@@ -303,6 +352,8 @@ struct ServerView: View {
                 accessCard
                 infoCard
 
+                if server.receiving { transferCard }
+
                 HStack(spacing: 12) {
                     TintButton(title: "Choose Folder", icon: "folder") { server.chooseFolder() }
                     if server.isRunning {
@@ -371,6 +422,32 @@ struct ServerView: View {
             infoRow("folder", "Saving to", server.folder.path)
         }
         .card(padding: 6)
+    }
+
+    /// Live "Receiving files…" status, shown while a transfer is in progress.
+    private var transferCard: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                Circle().fill(Theme.accent.opacity(0.15)).frame(width: 44, height: 44)
+                ProgressView().controlSize(.small)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Receiving files…").font(.system(size: 14, weight: .semibold))
+                Text(server.lastFile.isEmpty ? "From your phone" : server.lastFile)
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 0) {
+                Text("\(server.receivedCount)")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundStyle(Theme.accentGradient).monospacedDigit()
+                    .contentTransition(.numericText())
+                Text("received").font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+        }
+        .card(padding: 14)
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     private var divider: some View { Divider().opacity(0.5).padding(.horizontal, 14) }
