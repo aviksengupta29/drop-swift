@@ -32,4 +32,13 @@ struct Listing: Codable {
 struct Health: Codable {
     let status: String
     let name: String
+    /// Absolute path of the folder the server is currently sharing. Lets the
+    /// app detect when the folder is switched and refresh Browse.
+    let root: String?
+}
+
+/// The response from /api/ping (also carries the shared-folder path).
+struct PingResponse: Codable {
+    let ok: Bool?
+    let root: String?
 }

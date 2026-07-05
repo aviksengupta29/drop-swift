@@ -122,7 +122,9 @@ struct LockScreenView: View {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(s.done ? "Sent to \(device)" : "Sending to \(device)")
+                        Text(s.incoming
+                             ? (s.done ? "Saved to iPhone" : "Saving from \(device)")
+                             : (s.done ? "Sent to \(device)" : "Sending to \(device)"))
                             .font(.system(size: 16, weight: .semibold))
                             .lineLimit(1)
                         Label("via Wi‑Fi", systemImage: "wifi")
@@ -170,7 +172,7 @@ struct WatchTransferView: View {
             RingIcon(fraction: s.fraction, done: s.done, size: 34)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(s.done ? "Sent" : "Sending")
+                    Text(s.incoming ? (s.done ? "Saved" : "Saving") : (s.done ? "Sent" : "Sending"))
                         .font(.system(size: 14, weight: .semibold))
                         .lineLimit(1)
                     Spacer(minLength: 2)

@@ -22,12 +22,16 @@ struct UploadView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.l) {
                         header
-                        if server.isTransferring {
-                            transferCard
+                        if server.isTransferring && server.transferDirection == .send {
+                            TransferProgressCard(verb: "Sending") {
+                                Haptics.warning()
+                                sendTask?.cancel()
+                            }
                         } else {
                             uploadArea
                             if !selection.isEmpty { readyCard }
-                            if let result = server.transferResult { resultCard(result) }
+                            if let result = server.transferResult,
+                               server.transferDirection == .send { resultCard(result) }
                             if !server.failedItems.isEmpty { retryCard }
                         }
                     }
@@ -51,7 +55,8 @@ struct UploadView: View {
             }
         }
         .onChange(of: server.transferResult) { _, new in
-            if new != nil { Haptics.success() }
+            // Only for sends — restore has its own completion feedback.
+            if new != nil, server.transferDirection == .send { Haptics.success() }
         }
         .onChange(of: selection.count) { old, new in
             if new > old { Haptics.soft() }   // photos picked
@@ -146,76 +151,6 @@ struct UploadView: View {
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
-    // MARK: Live transfer
-
-    private var transferCard: some View {
-        VStack(spacing: Space.l) {
-            CircularProgress(fraction: server.transferOverall)
-                .padding(.top, Space.s)
-
-            VStack(spacing: Space.xs) {
-                Text("Sending \(min(server.transferCompleted + 1, server.transferTotal)) of \(server.transferTotal)")
-                    .font(.headline)
-                Text(server.transferCurrentName.isEmpty ? "Preparing…" : server.transferCurrentName)
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle)
-            }
-
-            HStack(spacing: 0) {
-                metric(icon: "gauge.with.dots.needle.67percent", label: "Speed") {
-                    Text(speedText).contentTransition(.numericText())
-                }
-                metricDivider
-                metric(icon: "clock", label: "Time left") { etaValue }
-                metricDivider
-                metric(icon: "photo.stack", label: "Files") {
-                    Text("\(server.transferCompleted)/\(server.transferTotal)")
-                        .contentTransition(.numericText())
-                }
-            }
-            .animation(.snappy, value: server.transferSpeed)
-
-            SecondaryButton(title: "Cancel", icon: "xmark", tint: Theme.error) {
-                Haptics.warning()
-                sendTask?.cancel()
-            }
-        }
-        .appCard()
-        .transition(.scale(scale: 0.92).combined(with: .opacity))
-    }
-
-    private func metric<V: View>(icon: String, label: String,
-                                 @ViewBuilder value: () -> V) -> some View {
-        VStack(spacing: 4) {
-            Image(systemName: icon).font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.accent)
-            value()
-                .font(.system(size: 16, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .lineLimit(1)
-            Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private var metricDivider: some View { Divider().frame(height: 36) }
-
-    @ViewBuilder private var etaValue: some View {
-        if let eta = server.transferETADate, eta > .now {
-            Text(timerInterval: Date.now...eta, countsDown: true)
-        } else {
-            Text("—")
-        }
-    }
-
-    private var speedText: String {
-        let bps = server.transferSpeed
-        guard bps > 1 else { return "—" }
-        let mb = bps / 1_000_000
-        if mb >= 1 { return String(format: "%.0f MB/s", mb) }
-        return String(format: "%.0f KB/s", bps / 1000)
-    }
-
     // MARK: Result
 
     private func resultCard(_ result: String) -> some View {
@@ -301,5 +236,80 @@ struct CircularProgress: View {
             }
         }
         .frame(width: 168, height: 168)
+    }
+}
+
+/// Shared live-transfer card — circular ring, speed / time-left / files, and a
+/// Cancel button. Used by BOTH Send (phone → Mac) and Restore (Mac → phone), so
+/// saving back to the iPhone gets the exact same premium treatment. `verb`
+/// selects the wording ("Sending" vs "Saving").
+struct TransferProgressCard: View {
+    @EnvironmentObject var server: ServerConnection
+    var verb: String
+    var onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: Space.l) {
+            CircularProgress(fraction: server.transferOverall)
+                .padding(.top, Space.s)
+
+            VStack(spacing: Space.xs) {
+                Text("\(verb) \(min(server.transferCompleted + 1, server.transferTotal)) of \(server.transferTotal)")
+                    .font(.headline)
+                Text(server.transferCurrentName.isEmpty ? "Preparing…" : server.transferCurrentName)
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+
+            HStack(spacing: 0) {
+                metric(icon: "gauge.with.dots.needle.67percent", label: "Speed") {
+                    Text(speedText).contentTransition(.numericText())
+                }
+                metricDivider
+                metric(icon: "clock", label: "Time left") { etaValue }
+                metricDivider
+                metric(icon: "photo.stack", label: "Files") {
+                    Text("\(server.transferCompleted)/\(server.transferTotal)")
+                        .contentTransition(.numericText())
+                }
+            }
+            .animation(.snappy, value: server.transferSpeed)
+
+            SecondaryButton(title: "Cancel", icon: "xmark", tint: Theme.error, action: onCancel)
+        }
+        .appCard()
+        .transition(.scale(scale: 0.92).combined(with: .opacity))
+    }
+
+    private func metric<V: View>(icon: String, label: String,
+                                 @ViewBuilder value: () -> V) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon).font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+            value()
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+            Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var metricDivider: some View { Divider().frame(height: 36) }
+
+    @ViewBuilder private var etaValue: some View {
+        if let eta = server.transferETADate, eta > .now {
+            Text(timerInterval: Date.now...eta, countsDown: true)
+        } else {
+            Text("—")
+        }
+    }
+
+    private var speedText: String {
+        let bps = server.transferSpeed
+        guard bps > 1 else { return "—" }
+        let mb = bps / 1_000_000
+        if mb >= 1 { return String(format: "%.0f MB/s", mb) }
+        return String(format: "%.0f KB/s", bps / 1000)
     }
 }

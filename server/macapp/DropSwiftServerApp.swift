@@ -11,6 +11,7 @@
 import SwiftUI
 import AppKit
 import Darwin
+import CoreImage.CIFilterBuiltins
 
 // MARK: - Design system (matches the iOS app)
 
@@ -168,6 +169,33 @@ final class ServerController: ObservableObject {
         self.ip = Self.localIPv4()
     }
 
+    /// The data encoded in the pairing QR code — scanning it in the DropSwift
+    /// iPhone app connects and authenticates without typing the access code.
+    var pairingURL: String { "dropswift://pair?host=\(ip)&port=\(port)&code=\(code)" }
+
+    /// Renders the pairing QR code as a template image — opaque ink, fully
+    /// transparent background — so the view can tint it with the app's accent
+    /// gradient instead of plain black. A computed property (not cached) is
+    /// fine here: it's a tiny image, only re-drawn when ip/port/code change.
+    var qrImage: NSImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.setValue(Data(pairingURL.utf8), forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage else { return nil }
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
+
+        let recolor = CIFilter.falseColor()
+        recolor.inputImage = scaled
+        recolor.color0 = CIColor(red: 0, green: 0, blue: 0, alpha: 1)   // ink
+        recolor.color1 = CIColor(red: 1, green: 1, blue: 1, alpha: 0)   // background
+        guard let colored = recolor.outputImage else { return nil }
+
+        let rep = NSCIImageRep(ciImage: colored)
+        let image = NSImage(size: rep.size)
+        image.addRepresentation(rep)
+        return image
+    }
+
     /// Generates a new access code (invalidates the old one on next start).
     func regenerateCode() {
         let c = String(format: "%06d", Int.random(in: 0...999_999))
@@ -197,7 +225,13 @@ final class ServerController: ObservableObject {
         outBuffer = ""
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
+            // Empty data means EOF (the subprocess's stdout closed, e.g. it
+            // exited). The pipe stays "readable" at EOF forever, so leaving
+            // the handler attached spins the run loop at 100% CPU — detach it.
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
             Task { @MainActor in self?.ingest(data) }
         }
 
@@ -389,16 +423,33 @@ struct ServerView: View {
         .shadow(color: Theme.accent.opacity(0.45), radius: 20, y: 12)
     }
 
-    /// Hero access-code card.
+    /// Hero access-code card — code and QR are both always visible, since
+    /// either one authenticates the phone on first connect.
     private var accessCard: some View {
-        VStack(spacing: 8) {
-            Text("ACCESS CODE")
-                .font(.system(size: 11, weight: .semibold)).tracking(2)
-                .foregroundStyle(.secondary)
-            Text(server.code)
-                .font(.system(size: 40, weight: .bold, design: .rounded))
-                .tracking(8)
-                .foregroundStyle(Theme.accentGradient)
+        VStack(spacing: 14) {
+            VStack(spacing: 8) {
+                Text("ACCESS CODE")
+                    .font(.system(size: 11, weight: .semibold)).tracking(2)
+                    .foregroundStyle(.secondary)
+                Text(server.code)
+                    .font(.system(size: 40, weight: .bold, design: .rounded))
+                    .tracking(8)
+                    .foregroundStyle(Theme.accentGradient)
+            }
+
+            if let qr = server.qrImage {
+                Image(nsImage: qr)
+                    .renderingMode(.template)
+                    .interpolation(.none)
+                    .resizable()
+                    .foregroundStyle(Theme.accentGradient)
+                    .frame(width: 168, height: 168)
+                    .padding(14)
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Theme.accent.opacity(0.18), lineWidth: 1))
+            }
+
             Button { server.regenerateCode() } label: {
                 Label("New code", systemImage: "arrow.clockwise")
                     .font(.system(size: 12, weight: .semibold))
@@ -406,8 +457,10 @@ struct ServerView: View {
             .buttonStyle(PressStyle())
             .foregroundStyle(Theme.accent)
             .help("Generate a new code")
-            Text("Enter this in the app the first time you connect")
+
+            Text("Scan the QR or enter the code in the app the first time you connect")
                 .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .card(padding: 20)

@@ -15,6 +15,7 @@ Phone and laptop must be on the same Wi-Fi / router.
 
 import argparse
 import atexit
+import hashlib
 import json
 import mimetypes
 import os
@@ -138,18 +139,25 @@ def lan_ip() -> str:
         s.close()
 
 
-def uniquify(path: str) -> str:
-    """If `path` exists, append ' (1)', ' (2)', ... before the extension so we
-    never overwrite a file that shares a name with an incoming one."""
-    if not os.path.exists(path):
-        return path
-    base, ext = os.path.splitext(path)
-    i = 1
+def open_unique(dest_dir: str, filename: str):
+    """Atomically create a brand-new file under `dest_dir`, appending ' (1)',
+    ' (2)', … before the extension if the name is taken.
+
+    Using O_CREAT|O_EXCL makes the name allocation race-free: when several
+    uploads with the SAME filename arrive at once (parallel transfer), each one
+    still gets its own distinct file instead of two threads opening — and
+    corrupting — the same path. Returns (open_fd, final_path)."""
+    base, ext = os.path.splitext(filename)
+    candidate = filename
+    i = 0
     while True:
-        candidate = "%s (%d)%s" % (base, i, ext)
-        if not os.path.exists(candidate):
-            return candidate
-        i += 1
+        path = os.path.join(dest_dir, candidate)
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            return fd, path
+        except FileExistsError:
+            i += 1
+            candidate = "%s (%d)%s" % (base, i, ext)
 
 
 def safe_join(root: str, rel: str) -> str:
@@ -200,11 +208,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             # Health is open (discovery); everything else needs a valid token.
             if path == "/" or path == "/api/health":
-                self._send_json({"status": "ok", "name": socket.gethostname(), "auth": True})
+                self._send_json({"status": "ok", "name": socket.gethostname(),
+                                 "auth": True, "root": SHARE_ROOT})
             elif path == "/api/ping":
                 if not self._authed():
                     return self._unauthorized()
-                self._send_json({"ok": True})
+                # `root` lets the phone notice when the shared folder is switched
+                # (the Mac restarts us with a new --dir) and auto-refresh Browse.
+                self._send_json({"ok": True, "root": SHARE_ROOT})
             elif path == "/api/list":
                 if not self._authed():
                     return self._unauthorized()
@@ -337,35 +348,55 @@ class Handler(BaseHTTPRequestHandler):
         filename = os.path.basename(filename)  # strip any path components
         dest_dir = safe_join(SHARE_ROOT, rel)
         os.makedirs(dest_dir, exist_ok=True)
-        dest = uniquify(safe_join(dest_dir, filename))
+
+        # Optional end-to-end integrity check: the app sends the SHA-256 of the
+        # exact bytes it is uploading. We hash what we actually receive and
+        # refuse to keep a file whose contents don't match — so a truncated or
+        # garbled transfer is rejected (the app retries) instead of silently
+        # leaving a broken file behind.
+        want_hash = self.headers.get("X-Content-SHA256", "").strip().lower()
+
+        # Allocate the destination atomically (race-free) so parallel uploads
+        # sharing a filename can never write to the same path.
+        fd, dest = open_unique(dest_dir, filename)
 
         length = int(self.headers.get("Content-Length", 0))
         written = 0
+        hasher = hashlib.sha256()
         emit_status("start", filename)
         # Stream straight to disk in 1 MB chunks — constant memory even for
         # multi-gigabyte files.
         try:
-            with open(dest, "wb") as f:
+            with os.fdopen(fd, "wb") as f:
                 remaining = length
                 while remaining > 0:
                     chunk = self.rfile.read(min(1024 * 1024, remaining))
                     if not chunk:
                         break
                     f.write(chunk)
+                    hasher.update(chunk)
                     written += len(chunk)
                     remaining -= len(chunk)
         except (BrokenPipeError, ConnectionResetError, socket.timeout):
             written = -1   # connection dropped / stalled mid-upload
 
-        # If the upload was cancelled / interrupted, discard the partial file.
-        if written != length:
+        size_ok = (written == length)
+        hash_ok = (not want_hash) or (hasher.hexdigest() == want_hash)
+
+        # If the upload was interrupted OR its contents don't match, discard the
+        # file so a broken copy never survives.
+        if not size_ok or not hash_ok:
             emit_status("fail", filename)
             try:
                 os.remove(dest)
             except OSError:
                 pass
+            # Close this keep-alive socket: a partially-read body would otherwise
+            # desync framing and could corrupt the NEXT file on the connection.
+            self.close_connection = True
+            reason = "incomplete upload" if not size_ok else "checksum mismatch"
             try:
-                self._send_json({"ok": False, "error": "incomplete upload"}, 400)
+                self._send_json({"ok": False, "error": reason}, 400)
             except Exception:
                 pass
             return

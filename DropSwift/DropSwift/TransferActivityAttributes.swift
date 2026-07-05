@@ -21,6 +21,7 @@ struct TransferActivityAttributes: ActivityAttributes {
         var done: Bool
         var speed: Double = 0      // bytes/sec (0 = unknown)
         var etaDate: Date? = nil   // projected completion time, for a live countdown
+        var incoming: Bool = false // true = saving back to iPhone, false = sending to Mac
     }
 
     var serverName: String        // the computer being sent to

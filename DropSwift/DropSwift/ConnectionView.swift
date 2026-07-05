@@ -13,6 +13,7 @@ struct ConnectionView: View {
     @EnvironmentObject var server: ServerConnection
     @State private var showManual = false
     @State private var showHelp = false
+    @State private var showScanner = false
 
     var body: some View {
         ScrollView {
@@ -33,6 +34,7 @@ struct ConnectionView: View {
             .padding(.horizontal, Space.l)
             .padding(.bottom, 130)
             .animation(.spring(response: 0.5, dampingFraction: 0.82), value: server.isConnected)
+            .animation(.spring(response: 0.5, dampingFraction: 0.82), value: server.wifiOff)
         }
         .scrollIndicators(.hidden)
     }
@@ -89,7 +91,9 @@ struct ConnectionView: View {
     // MARK: Searching
 
     @ViewBuilder private var searching: some View {
-        if server.discoveredServers.isEmpty {
+        if server.wifiOff {
+            wifiOffCard
+        } else if server.discoveredServers.isEmpty {
             VStack(spacing: Space.l) {
                 WifiPulse()
                 VStack(spacing: Space.s) {
@@ -153,10 +157,61 @@ struct ConnectionView: View {
         }
     }
 
+    // MARK: Wi‑Fi off
+
+    private var wifiOffCard: some View {
+        VStack(spacing: Space.l) {
+            ZStack {
+                Circle().fill(Theme.warning.opacity(0.14)).frame(width: 116, height: 116)
+                Image(systemName: "wifi.slash")
+                    .font(.system(size: 46, weight: .medium))
+                    .foregroundStyle(Theme.warning)
+                    .symbolEffect(.pulse, options: .repeating)
+            }
+            VStack(spacing: Space.xs) {
+                Text("Wi‑Fi is off").font(.title3.weight(.bold))
+                Text("DropSwift finds your computer over Wi‑Fi. Open Control Centre and tap the Wi‑Fi button to turn it back on, then rejoin your computer's network.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            // Control Centre hint — the reliable, one-tap way to re-enable Wi‑Fi
+            // (iOS has no public link to the Settings → Wi‑Fi pane).
+            HStack(spacing: Space.s) {
+                Image(systemName: "square.grid.2x2")
+                    .foregroundStyle(Theme.accent)
+                Text("Swipe down from the top‑right corner")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, Space.m).padding(.vertical, Space.s)
+            .background(Theme.accent.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: Radius.inner, style: .continuous))
+
+            PrimaryButton(title: "Open Settings", icon: "gearshape.fill") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            .frame(maxWidth: 260)
+        }
+        .frame(maxWidth: .infinity)
+        .appCard(padding: Space.xl)
+        .transition(.scale(scale: 0.94).combined(with: .opacity))
+    }
+
     // MARK: Manual entry
 
     private var manual: some View {
         VStack(spacing: Space.m) {
+            SecondaryButton(title: "Scan QR Code", icon: "qrcode.viewfinder") {
+                showScanner = true
+            }
+            .accessibilityIdentifier("scan-qr")
+            .fullScreenCover(isPresented: $showScanner) {
+                QRScanView().environmentObject(server)
+            }
+
             Button {
                 Haptics.light()
                 withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) { showManual.toggle() }
@@ -183,6 +238,7 @@ struct ConnectionView: View {
                     PrimaryButton(title: "Connect", icon: "link") {
                         Task { await server.connectManually() }
                     }
+                    .accessibilityIdentifier("manual-connect")
                 }
                 .appCard()
                 .transition(.move(edge: .top).combined(with: .opacity))
@@ -341,6 +397,7 @@ struct CodeEntryView: View {
                         if server.isConnected { Haptics.success(); dismiss() } else { Haptics.warning() }
                     }
                 }
+                .accessibilityIdentifier("code-connect")
                 .padding(.horizontal, Space.xl)
 
                 Button("Cancel") { dismiss() }.foregroundStyle(.secondary)

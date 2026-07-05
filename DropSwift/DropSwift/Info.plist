@@ -9,7 +9,9 @@
 		<string>_dropswift._tcp</string>
 	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>DropSwift needs access to your photos and videos so you can send them to your computer.</string>
+	<string>DropSwift needs access to your photos and videos so you can send them to your computer and save them back to your library with their original dates.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>DropSwift uses the camera to scan the QR code shown in the DropSwift Server app so you can connect without typing the access code.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

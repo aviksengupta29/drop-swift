@@ -81,6 +81,7 @@ struct FloatingTabBar: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("tab-\(tab.title)")   // UI-test hook
     }
 }
 
