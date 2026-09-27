@@ -45,6 +45,20 @@ Defender Firewall** for **Private networks** when prompted.
 > Auto-discovery on Windows requires the `zeroconf` package (installed by the
 > commands above). The Windows scripts install it for you.
 
+Windows has no GUI app (the Mac's "DropSwift Server.app" is Mac-only), but the
+console/log output gives you the same pairing experience:
+- The access code is generated once and **reused across restarts** (saved to
+  `%USERPROFILE%\.dropswift\access_code.txt`) instead of changing every launch.
+- A scannable **QR code** (same `dropswift://pair` link the Mac app shows as an
+  image) is printed alongside it — scan it in the app instead of typing the code.
+- Because `install-autostart-windows.bat` runs with no visible console, all of
+  this — access code, IP/port, QR code — is written to
+  `%USERPROFILE%\.dropswift\server.log` on every start; the installer opens it
+  in Notepad for you the first time.
+- The PC is also kept from idle-sleeping while the server runs, so an overnight
+  transfer isn't dropped (closing the lid can still sleep it — that's a separate
+  Windows power setting).
+
 ## Auto-discovery (Bonjour)
 
 The server announces itself on the local network via Bonjour (`_dropswift._tcp`),

@@ -7,3 +7,9 @@
 #   pip install -r requirements.txt
 #
 zeroconf>=0.130
+
+# Optional: prints a scannable QR code (same pairing link the Mac app shows as
+# an image) to the console so console-only launches — Windows, or a manual
+# `python3 server.py` — can also be paired by scanning instead of typing the
+# access code. The server runs fine without it, just without the QR.
+qrcode>=7.4

@@ -23,7 +23,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install build tools
-        run: pip install pyinstaller zeroconf
+        run: pip install pyinstaller zeroconf qrcode
 
       - name: Build single-file exe
         run: >
@@ -31,6 +31,7 @@ jobs:
           --name DropSwift-Server
           --icon assets/dropswift.ico
           --collect-all zeroconf
+          --collect-all qrcode
           server/server.py
 
       - name: Upload the exe

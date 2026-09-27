@@ -16,6 +16,7 @@ Phone and laptop must be on the same Wi-Fi / router.
 import argparse
 import atexit
 import hashlib
+import io
 import json
 import mimetypes
 import os
@@ -72,6 +73,93 @@ def emit_status(event: str, name: str = ""):
 
 def new_code() -> str:
     return "".join(secrets.choice("0123456789") for _ in range(6))
+
+
+# Where a machine-generated access code is remembered between runs, so a
+# console-only launch (the Windows .exe, or `python3 server.py` on any
+# platform) keeps the same code across restarts instead of forcing the phone
+# to be re-paired every time. The Mac app manages its own code (in
+# UserDefaults) and always passes --code explicitly, so it doesn't rely on
+# this file, but writes through to it too for consistency.
+CODE_FILE = os.path.join(os.path.expanduser("~"), ".dropswift", "access_code.txt")
+
+
+def load_persisted_code() -> str:
+    try:
+        with open(CODE_FILE, "r") as f:
+            code = f.read().strip()
+        return code if len(code) == 6 and code.isdigit() else ""
+    except OSError:
+        return ""
+
+
+def save_persisted_code(code: str):
+    try:
+        os.makedirs(os.path.dirname(CODE_FILE), exist_ok=True)
+        with open(CODE_FILE, "w") as f:
+            f.write(code)
+    except OSError:
+        pass
+
+
+# Mirrors everything printed at startup into a file, since a console-less
+# launch has nowhere else for it to go: Windows Task Scheduler runs the
+# autostart entry via pythonw.exe with no console attached, so a plain
+# print() is invisible (and, with no valid stdout handle, can even raise).
+# This is the only place someone can find their access code after a logon-
+# triggered start. macOS's launchd path already redirects stdout to its own
+# log file, so this is a redundant-but-harmless second copy there.
+LOG_FILE = os.path.join(os.path.expanduser("~"), ".dropswift", "server.log")
+
+
+def log(msg: str = ""):
+    try:
+        print(msg)
+    except Exception:
+        pass
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except OSError:
+        pass
+
+
+def pairing_qr_text(ip: str, port: int, code: str):
+    """Returns a scannable ASCII QR code for the same dropswift://pair link the
+    Mac app renders as an image, so console-only launches (Windows, or a
+    manual `python3 server.py`) can also be paired by scanning instead of
+    typing the code. Returns None if the optional `qrcode` package isn't
+    installed."""
+    try:
+        import qrcode
+    except ImportError:
+        return None
+    url = "dropswift://pair?host=%s&port=%d&code=%s" % (ip, port, code)
+    try:
+        qr = qrcode.QRCode(border=1)
+        qr.add_data(url)
+        qr.make(fit=True)
+        buf = io.StringIO()
+        qr.print_ascii(out=buf, tty=False)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def prevent_sleep_windows():
+    """Keep a Windows PC from idle-sleeping while the server runs, mirroring
+    the Mac app's beginActivity call, so a long/overnight transfer doesn't get
+    dropped when the laptop suspends. No-op on other platforms."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ES_CONTINUOUS = 0x80000000
+        ES_SYSTEM_REQUIRED = 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+    except Exception:
+        pass
 
 
 def _instance_name() -> str:
@@ -423,41 +511,68 @@ def main():
                         help="folder to share (default: ./shared, or Desktop/DropSwift for the app)")
     parser.add_argument("--port", type=int, default=8080, help="port (default: 8080)")
     parser.add_argument("--code", default=None,
-                        help="6-digit access code (random if omitted)")
+                        help="6-digit access code (persisted + reused if omitted)")
+    parser.add_argument("--new-code", action="store_true",
+                        help="force a freshly generated access code instead of reusing the saved one")
     args = parser.parse_args()
 
     SHARE_ROOT = os.path.realpath(os.path.expanduser(args.dir))
     os.makedirs(SHARE_ROOT, exist_ok=True)
-    ACCESS_CODE = args.code or new_code()
+
+    if args.code:
+        ACCESS_CODE = args.code
+    elif args.new_code:
+        ACCESS_CODE = new_code()
+    else:
+        ACCESS_CODE = load_persisted_code() or new_code()
+    save_persisted_code(ACCESS_CODE)
 
     ip = lan_ip()
     server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
 
     method = advertise(args.port)
+    prevent_sleep_windows()
 
     # On SIGTERM (e.g. the Mac app stopping us), exit cleanly so the atexit
     # handlers run and the Bonjour service is unregistered immediately — the
     # phone then sees this computer vanish from the list right away.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
-    print("=" * 56)
-    print(" DropSwift server is running")
-    print(" Sharing folder : %s" % SHARE_ROOT)
-    print(" On this device : http://%s:%d" % (ip, args.port))
-    print(" ACCESS CODE    : %s   (enter this in the app to connect)" % ACCESS_CODE)
+    # Fresh log per run — this is what a logon-triggered Windows autostart
+    # (no console window) leaves behind for someone to go find.
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        open(LOG_FILE, "w").close()
+    except OSError:
+        pass
+
+    log("=" * 56)
+    log(" DropSwift server is running")
+    log(" Sharing folder : %s" % SHARE_ROOT)
+    log(" On this device : http://%s:%d" % (ip, args.port))
+    log(" ACCESS CODE    : %s   (enter this in the app to connect)" % ACCESS_CODE)
     if method is not None:
-        print(" Auto-discovery : ON via %s (the app finds this computer" % method)
-        print("                  by itself — no IP/port typing needed)")
+        log(" Auto-discovery : ON via %s (the app finds this computer" % method)
+        log("                  by itself — no IP/port typing needed)")
     else:
-        print(" Auto-discovery : off — install it with 'pip install zeroconf',")
-        print("                  or in the app enter Host %s, Port %d"
-              % (ip, args.port))
-    print(" Press Ctrl+C to stop.")
-    print("=" * 56)
+        log(" Auto-discovery : off — install it with 'pip install zeroconf',")
+        log("                  or in the app enter Host %s, Port %d"
+            % (ip, args.port))
+    log(" Press Ctrl+C to stop.")
+    log("=" * 56)
+    log("")
+    qr_text = pairing_qr_text(ip, args.port, ACCESS_CODE)
+    if qr_text:
+        log(qr_text)
+        log(" Scan this QR code in the DropSwift app to connect instantly.")
+    else:
+        log(" Tip: 'pip install qrcode' to get a scannable QR code here too.")
+    log("")
+    log(" (This info is also saved to %s)" % LOG_FILE)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopping DropSwift server.")
+        log("\nStopping DropSwift server.")
         server.shutdown()
 
 
